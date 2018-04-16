@@ -14,6 +14,9 @@
  *
  */
 
+// uncomment to enable the dev_dbg prints to dmesg
+//#define DEBUG
+
 #include <linux/acpi.h>
 #include <linux/dmi.h>
 #include <linux/module.h>
@@ -2307,11 +2310,11 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
             max_id = 0;
         }
 
-        dev_info(&mxtdata->i2cclient->dev,
-                 "T%u Start:%u Size:%zu Instances:%zu Report IDs:%u-%u\n",
-                 object->type, object->start_address,
-                 mxt_obj_size(object), mxt_obj_instances(object),
-                 min_id, max_id);
+        dev_dbg(&mxtdata->i2cclient->dev,
+                "T%u Start:%u Size:%zu Instances:%zu Report IDs:%u-%u\n",
+                object->type, object->start_address,
+                mxt_obj_size(object), mxt_obj_instances(object),
+                min_id, max_id);
 
         switch (object->type)
         {
@@ -3433,7 +3436,7 @@ recheck:
         dev_err(dev, "Bootloader read FAIL\n");
         return ret_val;
     }
-    dev_info(dev, "Bootloader status_byte %02X\n", status_byte);
+    dev_dbg(dev, "Bootloader status_byte %02X\n", status_byte);
     if ( (MXT_BOOT_STATUS_WAITING_FRAME_DATA == expected_next_state) ||
          (MXT_BOOT_STATUS_WAITING_BOOTLOAD_CMD == expected_next_state) )
     {
@@ -3490,11 +3493,8 @@ static int mxt_check_firmware_format(struct device *dev, const struct firmware *
         pos++;
     }
 
-    /*
-     * To convert file try:
-     * xxd -r -p mXTXXX__APP_VX-X-XX.enc > maxtouch.fw
-     */
     dev_err(dev, "Aborting: firmware file must be in binary format\n");
+    dev_err(dev, "xxd -r -p mXTXXX__APP_VX-X-XX.enc > maxtouch.fw\n");
 
     return -EINVAL;
 }
@@ -3610,7 +3610,7 @@ static int mxt_send_frames(struct mxt_data *mxtdata)
         }
 
         // Check CRC
-        dev_info(dev, "Checking CRC\n");
+        dev_dbg(dev, "Checking CRC\n");
         ret_val = mxt_check_bootloader(mxtdata, MXT_BOOT_STATUS_FRAME_CRC_PASS);
         if (MXT_ERROR_BOOTLOADER_FRAME_CRC_FAIL == ret_val)
         {
@@ -3629,7 +3629,7 @@ static int mxt_send_frames(struct mxt_data *mxtdata)
         }
         else
         {
-            dev_info(dev, "CRC pass\n");
+            dev_dbg(dev, "CRC pass\n");
             mxtflash->frame_retry = 0;
             mxtflash->frame_count++;
             mxtflash->fw_pos += mxtflash->frame_size;
@@ -3656,7 +3656,7 @@ static int mxt_load_fw(struct device *dev)
     ret_val = request_firmware(&mxtdata->mxtflash->fw, mxtdata->fw_name, dev);
     if (ret_val)
     {
-        dev_err(dev, "Unable to open firmware %s\n", mxtdata->fw_name);
+        dev_err(dev, "request_firmware %s\n", mxtdata->fw_name);
         goto free;
     }
 
@@ -3751,6 +3751,7 @@ static ssize_t mxt_devattr_update_fw_store(struct device *dev,
     {
         dev_info(dev, "The firmware update succeeded\n");
 
+        msleep(MXT_RESET_TIME);
         mxtdata->suspended = false;
 
         ret_val = mxt_initialize(mxtdata);
@@ -4139,7 +4140,7 @@ static int mxt_input_open(struct input_dev *inputdev)
 {
     struct mxt_data *mxtdata = input_get_drvdata(inputdev);
     int ret_val;
-    dev_info(&mxtdata->i2cclient->dev, "%s \n", __func__);
+    dev_info(&mxtdata->i2cclient->dev, "%s\n", __func__);
     ret_val = mxt_start(mxtdata);
 
     if (ret_val)
@@ -4154,7 +4155,7 @@ static void mxt_input_close(struct input_dev *inputdev)
 {
     struct mxt_data *mxtdata = input_get_drvdata(inputdev);
     int ret_val;
-    dev_info(&mxtdata->i2cclient->dev, "%s \n", __func__);
+    dev_info(&mxtdata->i2cclient->dev, "%s\n", __func__);
     ret_val = mxt_stop(mxtdata);
 
     if (ret_val)
@@ -4612,12 +4613,14 @@ static int __maybe_unused mxt_resume(struct device *dev)
 
 static SIMPLE_DEV_PM_OPS(mxt_pm_ops, mxt_suspend, mxt_resume);
 
+#ifdef CONFIG_OF // Open Firmware (Device Tree)
 static const struct of_device_id mxt_of_match[] =
 {
     { .compatible = "atmel,maxtouch", },
     {},
 };
 MODULE_DEVICE_TABLE(of, mxt_of_match);
+#endif // CONFIG_OF
 
 #ifdef CONFIG_ACPI // Advanced Configuration and Power Interface
 static const struct acpi_device_id mxt_acpi_id[] =
