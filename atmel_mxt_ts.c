@@ -16,6 +16,8 @@
 
 // uncomment to enable the dev_dbg prints to dmesg
 //#define DEBUG
+// uncomment to test with input forced open
+//#define INPUT_DEVICE_ALWAYS_OPEN
 
 #include <linux/acpi.h>
 #include <linux/dmi.h>
@@ -2857,8 +2859,7 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
 static int mxt_input_open(struct input_dev *inputdev);
 static void mxt_input_close(struct input_dev *inputdev);
 
-static void mxt_set_up_as_touchpad(struct input_dev *inputdev,
-                                   struct mxt_data *mxtdata)
+static void mxt_set_up_as_touchpad(struct input_dev *inputdev, struct mxt_data *mxtdata)
 {
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
@@ -2956,8 +2957,11 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     inputdev->phys = mxtdata->phys;
     inputdev->id.bustype = BUS_I2C;
     inputdev->dev.parent = dev;
+
+#ifndef INPUT_DEVICE_ALWAYS_OPEN
     inputdev->open = mxt_input_open;
     inputdev->close = mxt_input_close;
+#endif //INPUT_DEVICE_ALWAYS_OPEN
 
     set_bit(EV_ABS, inputdev->evbit);
     input_set_capability(inputdev, EV_KEY, BTN_TOUCH);
@@ -3079,6 +3083,10 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     mxtdata->inputdev = inputdev;
 
     dev_info(dev, "%s OK\n", __func__);
+
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+    mxt_input_open(mxtdata->inputdev);
+#endif //INPUT_DEVICE_ALWAYS_OPEN
 
     return 0;
 
@@ -4620,6 +4628,13 @@ static int mxt_remove(struct i2c_client *i2cclient)
 {
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
     dev_info(&i2cclient->dev, "%s \n", __func__);
+
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+    if (mxtdata->inputdev)
+    {
+        mxt_input_close(mxtdata->inputdev);
+    }
+#endif //INPUT_DEVICE_ALWAYS_OPEN
 
     sysfs_remove_group(&i2cclient->dev.kobj, &mxt_fw_attr_group);
     mxt_sysfs_debug_msg_remove(mxtdata);
