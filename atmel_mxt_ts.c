@@ -51,7 +51,6 @@ enum mxt_suspend_mode
 /* The platform data for the Atmel maXTouch touchscreen driver */
 struct mxt_platform_data
 {
-    unsigned long irqflags;
     u8 t19_num_keys;
     const unsigned int *t19_keymap;
     enum mxt_suspend_mode suspend_mode;
@@ -456,7 +455,7 @@ static void mxt_debug_msg_enable(struct mxt_data *mxtdata)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     if (mxtdata->debug_v2_enabled)
     {
@@ -483,7 +482,7 @@ static void mxt_debug_msg_disable(struct mxt_data *mxtdata)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     if (!mxtdata->debug_v2_enabled)
     {
@@ -504,7 +503,7 @@ static void mxt_debug_msg_add(struct mxt_data *mxtdata, u8 *msg)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     mutex_lock(&mxtdata->debug_msg_lock);
 
@@ -588,6 +587,8 @@ static ssize_t mxt_sysfs_debug_msg_read(struct file *filp,
 
 static int mxt_sysfs_debug_msg_init(struct mxt_data *mxtdata)
 {
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
+
     sysfs_bin_attr_init(&mxtdata->debug_msg_attr);
     mxtdata->debug_msg_attr.attr.name = "debug_msg";
     mxtdata->debug_msg_attr.attr.mode = 0666;
@@ -605,6 +606,8 @@ static int mxt_sysfs_debug_msg_init(struct mxt_data *mxtdata)
 
 static void mxt_sysfs_debug_msg_remove(struct mxt_data *mxtdata)
 {
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
+
     if (mxtdata->debug_msg_attr.attr.name)
     {
         sysfs_remove_bin_file(&mxtdata->i2cclient->dev.kobj, &mxtdata->debug_msg_attr);
@@ -794,7 +797,7 @@ static int mxt_wait_for_completion(struct mxt_data *mxtdata,
     unsigned long timeout = msecs_to_jiffies(timeout_ms);
     long ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s %s\n", __func__, dbg_str);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s %s >\n", __func__, dbg_str);
 
     ret_val = wait_for_completion_interruptible_timeout(comp, timeout);
     if (ret_val < 0)
@@ -913,6 +916,8 @@ static int mxt_probe_bootloader(struct mxt_data *mxtdata, bool alt_address)
     u8 buf[3];
     bool is_crc_failure, is_extended_id;
 
+    dev_dbg(dev, "%s >\n", __func__);
+
     ret_val = mxt_lookup_bootloader_address(mxtdata, alt_address);
     if (ret_val)
     {
@@ -944,7 +949,7 @@ static int mxt_send_bootloader_reset_cmd(struct mxt_data *mxtdata)
 {
     u8 buf[2] = {0x01, 0x01};
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     return mxt_bootloader_write(mxtdata, buf, 2);
 }
@@ -953,7 +958,7 @@ static int mxt_send_bootloader_unlock_cmd(struct mxt_data *mxtdata)
 {
     u8 buf[2] = {MXT_UNLOCK_CMD_BYTE0, MXT_UNLOCK_CMD_BYTE1};
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     return mxt_bootloader_write(mxtdata, buf, 2);
 }
@@ -986,6 +991,8 @@ static int mxt_write_object(struct mxt_data *mxtdata, u8 type, u8 offset, u8 val
     struct mxt_object *object;
     u16 reg;
 
+    dev_dbg(&mxtdata->i2cclient->dev, "%s %d %d %d >\n", __func__, type, offset, val);
+
     object = mxt_get_object(mxtdata, type);
     if (NULL == object || offset >= mxt_obj_size(object))
     {
@@ -1002,7 +1009,7 @@ static void mxt_input_button(struct mxt_data *mxtdata, u8 *message)
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     for (i = 0; i < mxtplatform->t19_num_keys; i++)
     {
@@ -1018,7 +1025,7 @@ static void mxt_input_button(struct mxt_data *mxtdata, u8 *message)
 
 static void mxt_input_sync(struct mxt_data *mxtdata)
 {
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (mxtdata->inputdev)
     {
@@ -1426,7 +1433,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         return 0;
     }
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s, report_id = %d\n", __func__, report_id);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s, report_id = %d >\n", __func__, report_id);
 
     if (report_id == mxtdata->T6_reportid)
     {
@@ -1502,7 +1509,7 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
     int i;
     u8 num_valid = 0;
 
-    dev_dbg(dev, "%s %d\n", __func__, count);
+    dev_dbg(dev, "%s %d >\n", __func__, count);
 
     /* Safety check for msg_buf */
     if (count > mxtdata->max_reportid)
@@ -1531,6 +1538,8 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
         }
     }
 
+    dev_dbg(dev, "%s %d <\n", __func__, num_valid);
+
     /* return number of messages read */
     return num_valid;
 }
@@ -1541,7 +1550,7 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
     int ret_val;
     u8 count, num_left;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     /* Read T44 and T5 together */
     ret_val = __mxt_read_reg(mxtdata->i2cclient,
@@ -1606,7 +1615,7 @@ static int mxt_process_messages_until_invalid(struct mxt_data *mxtdata)
     int count, read;
     u8 tries = 2;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     count = mxtdata->max_reportid;
 
@@ -1637,7 +1646,7 @@ static irqreturn_t mxt_process_messages(struct mxt_data *mxtdata)
     int total_handled, num_handled;
     u8 count = mxtdata->last_message_count;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (count < 1 || count > mxtdata->max_reportid)
     {
@@ -1688,7 +1697,7 @@ static irqreturn_t mxt_interrupt(int irq, void *dev_id)
 {
     struct mxt_data *mxtdata = dev_id;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     complete(&mxtdata->chg_completion);
 
@@ -1711,6 +1720,8 @@ static int mxt_t6_command(struct mxt_data *mxtdata, u16 cmd_offset, u8 cmd_value
     u8 command_register;
     int timeout_counter = 100;
     int ret_val;
+
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     reg = mxtdata->T6_address + cmd_offset;
 
@@ -1751,7 +1762,7 @@ static int mxt_soft_reset(struct mxt_data *mxtdata)
     struct device *dev = &mxtdata->i2cclient->dev;
     int ret_val = 0;
 
-    dev_info(dev, "Resetting device\n");
+    dev_info(dev, "%s >\n", __func__);
 
     disable_irq(mxtdata->irq);
 
@@ -1773,13 +1784,13 @@ static int mxt_soft_reset(struct mxt_data *mxtdata)
     {
         return ret_val;
     }
-    dev_info(dev, "%s OK\n", __func__);
+    dev_info(dev, "%s <\n", __func__);
     return 0;
 }
 
 static void mxt_update_crc(struct mxt_data *mxtdata, u8 cmd_offset, u8 cmd_value)
 {
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     /*
      * On failure, CRC is set to 0 and config will always be downloaded
@@ -1884,7 +1895,7 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
     u16 reg;
     u8 val;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     while (cfg->raw_pos < cfg->raw_size)
     {
@@ -1996,7 +2007,7 @@ static int mxt_upload_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
     unsigned int byte_offset = 0;
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     /* Write configuration as blocks */
     while (byte_offset < cfg->mem_size)
@@ -2055,7 +2066,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
     u32 info_crc, config_crc, calculated_crc;
     u16 crc_start = 0;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     /* Make zero terminated copy of the OBP_RAW file */
     cfg.raw = kzalloc(fw->size + 1, GFP_KERNEL);
@@ -2232,7 +2243,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
 {
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!mxtdata->irq)
     {
@@ -2240,7 +2251,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
         ret_val = request_threaded_irq(mxtdata->irq,
                                        NULL,
                                        mxt_interrupt,
-                                       mxtdata->mxtplatform->irqflags | IRQF_ONESHOT | IRQF_NO_SUSPEND,
+                                       IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_NO_SUSPEND,
                                        mxtdata->i2cclient->name,
                                        mxtdata);
         if (ret_val)
@@ -2266,7 +2277,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
         }
     }
 
-    dev_info(&mxtdata->i2cclient->dev, "%s OK\n", __func__);
+    dev_info(&mxtdata->i2cclient->dev, "%s <\n", __func__);
 
     return 0;
 }
@@ -2276,7 +2287,7 @@ static void mxt_input_close(struct input_dev *inputdev);
 
 static void mxt_free_input_device(struct mxt_data *mxtdata)
 {
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (mxtdata->inputdev)
     {
@@ -2291,7 +2302,7 @@ static void mxt_free_input_device(struct mxt_data *mxtdata)
 
 static void mxt_free_object_table(struct mxt_data *mxtdata)
 {
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     mxtdata->object_table = NULL;
     mxtdata->mxtinfo = NULL;
@@ -2480,7 +2491,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     u32 calculated_crc;
     u8 *crc_ptr;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     /* If info block already allocated, free it */
     if (mxtdata->raw_info_block != NULL)
@@ -2574,7 +2585,7 @@ static void mxt_regulator_enable(struct mxt_data *mxtdata)
 {
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!mxtdata->reg_vdd || !mxtdata->reg_avdd)
     {
@@ -2617,7 +2628,7 @@ retry_wait:
 
 static void mxt_regulator_disable(struct mxt_data *mxtdata)
 {
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!mxtdata->reg_vdd || !mxtdata->reg_avdd)
     {
@@ -2633,7 +2644,7 @@ static int mxt_probe_regulators(struct mxt_data *mxtdata)
     struct device *dev = &mxtdata->i2cclient->dev;
     int ret_val;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     /* Must have reset GPIO to use regulator support */
     if (!gpio_is_valid(mxtdata->mxtplatform->gpio_reset))
@@ -2688,7 +2699,7 @@ static int mxt_read_t9_resolution(struct mxt_data *mxtdata)
     unsigned char orient;
     struct mxt_object *object;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     object = mxt_get_object(mxtdata, MXT_TOUCH_MULTI_T9);
     if (!object)
@@ -2730,7 +2741,7 @@ static int mxt_set_up_active_stylus(struct input_dev *inputdev,
     int aux;
     u8 ctrl;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     object = mxt_get_object(mxtdata, MXT_PROCI_ACTIVESTYLUS_T107);
     if (!object)
@@ -2791,7 +2802,7 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
     u8 cfg, tchaux;
     u8 aux;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     object = mxt_get_object(mxtdata, MXT_TOUCH_MULTITOUCHSCREEN_T100);
     if (!object)
@@ -2869,7 +2880,7 @@ static void mxt_set_up_as_touchpad(struct input_dev *inputdev, struct mxt_data *
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     inputdev->name = "Atmel maXTouch Touchpad";
 
@@ -2898,7 +2909,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     unsigned int mt_flags = 0;
     int i;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     switch (mxtdata->multitouch)
     {
@@ -3087,7 +3098,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     mxtdata->inputdev = inputdev;
 
-    dev_info(dev, "%s OK\n", __func__);
+    dev_info(dev, "%s <\n", __func__);
 
 #ifdef INPUT_DEVICE_ALWAYS_OPEN
     mxt_input_open(mxtdata->inputdev);
@@ -3106,7 +3117,7 @@ static int mxt_t93_configuration(struct mxt_data *mxtdata, u16 cmd_offset, u8 st
     u8 command_register;
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     reg = mxtdata->T93_address + cmd_offset;
     ret_val = __mxt_read_reg(mxtdata->i2cclient, reg, 1, &command_register);
@@ -3139,7 +3150,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     u8 command_register;
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     reg = mxtdata->T100_address + cmd_offset;
     command_register = type;
@@ -3171,7 +3182,7 @@ static int mxt_initialize(struct mxt_data *mxtdata)
     int recovery_attempts = 0;
     int ret_val;
 
-    dev_dbg(&i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&i2cclient->dev, "%s >\n", __func__);
 
     while (1)
     {
@@ -3260,7 +3271,7 @@ static int mxt_initialize(struct mxt_data *mxtdata)
         }
     }
 
-    dev_info(&i2cclient->dev, "%s OK\n", __func__);
+    dev_info(&i2cclient->dev, "%s <\n", __func__);
 
     return 0;
 
@@ -3276,7 +3287,7 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
     struct t7_config *new_config;
     struct t7_config deepsleep = { .active = 0, .idle = 0 };
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (sleep == MXT_POWER_CFG_DEEPSLEEP)
     {
@@ -3305,7 +3316,7 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
     int ret_val;
     int retry;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     for (retry = 0; retry < 2; retry++)
     {
@@ -3348,7 +3359,7 @@ static int mxt_configure_objects(struct mxt_data *mxtdata, const struct firmware
     struct device *dev = &mxtdata->i2cclient->dev;
     int ret_val;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     ret_val = mxt_init_t7_power_cfg(mxtdata);
     if (ret_val)
@@ -3588,7 +3599,7 @@ static int mxt_enter_bootloader(struct mxt_data *mxtdata)
 {
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (mxtdata->suspended)
     {
@@ -3638,7 +3649,7 @@ static int mxt_send_frames(struct mxt_data *mxtdata)
     struct mxt_flash *mxtflash = mxtdata->mxtflash;
     int ret_val;
 
-    dev_dbg(dev, "%s\n", __func__);
+    dev_dbg(dev, "%s >\n", __func__);
 
     if (NULL == mxtflash)
     {
@@ -3734,7 +3745,7 @@ static int mxt_load_fw(struct device *dev)
     struct mxt_data *mxtdata = dev_get_drvdata(dev);
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     mxtdata->mxtflash = devm_kzalloc(dev, sizeof(struct mxt_flash), GFP_KERNEL);
     if (!mxtdata->mxtflash)
@@ -4030,6 +4041,8 @@ static int mxt_sysfs_mem_access_init(struct mxt_data *mxtdata)
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
 
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
+
     ret_val = sysfs_create_group(&i2cclient->dev.kobj, &mxt_attr_group);
     if (ret_val)
     {
@@ -4058,6 +4071,8 @@ static void mxt_sysfs_mem_access_remove(struct mxt_data *mxtdata)
 {
     struct i2c_client *i2cclient = mxtdata->i2cclient;
 
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
+
     if (mxtdata->mem_access_attr.attr.name)
     {
         sysfs_remove_bin_file(&i2cclient->dev.kobj,
@@ -4071,7 +4086,7 @@ static void mxt_reset_slots(struct mxt_data *mxtdata)
     struct input_dev *inputdev = mxtdata->inputdev;
     int id;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!inputdev)
     {
@@ -4092,11 +4107,11 @@ static int mxt_start(struct mxt_data *mxtdata)
     int ret_val;
     struct i2c_client *i2cclient = mxtdata->i2cclient;
 
-    dev_info(&i2cclient->dev, "%s, suspend_mode %d, double_tap_enable %d\n", __func__, mxtdata->mxtplatform->suspend_mode, mxtdata->double_tap_enable);
+    dev_info(&i2cclient->dev, "%s, suspend_mode %d, double_tap_enable %d >\n", __func__, mxtdata->mxtplatform->suspend_mode, mxtdata->double_tap_enable);
 
     if (!mxtdata->suspended || mxtdata->in_bootloader)
     {
-        dev_info(&i2cclient->dev, "%s, suspended %d, in_bootloader = %d\n", __func__, mxtdata->suspended, mxtdata->in_bootloader);
+        dev_info(&i2cclient->dev, "%s, suspended %d, in_bootloader = %d <\n", __func__, mxtdata->suspended, mxtdata->in_bootloader);
         return 0;
     }
 
@@ -4157,6 +4172,8 @@ static int mxt_start(struct mxt_data *mxtdata)
 
     mxtdata->suspended = false;
 
+    dev_info(&i2cclient->dev, "%s <\n",__func__);
+
     return 0;
 }
 
@@ -4165,10 +4182,11 @@ static int mxt_stop(struct mxt_data *mxtdata)
     int ret_val;
     struct i2c_client *i2cclient = mxtdata->i2cclient;
 
-    dev_info(&i2cclient->dev, "%s, suspend mode = %d, double_tap_enable = %d\n",__func__, mxtdata->mxtplatform->suspend_mode, mxtdata->double_tap_enable);
+    dev_info(&i2cclient->dev, "%s, suspend mode %d, double_tap_enable %d >\n", __func__, mxtdata->mxtplatform->suspend_mode, mxtdata->double_tap_enable);
+
     if (mxtdata->suspended || mxtdata->in_bootloader || mxtdata->updating_config)
     {
-        dev_info(&i2cclient->dev, "%s, mxtdata->suspended = %d, mxtdata->in_bootloader = %d, mxtdata->updating_config = %d, \n",__func__, mxtdata->suspended, mxtdata->in_bootloader, mxtdata->updating_config);
+        dev_info(&i2cclient->dev, "%s, suspended %d, in_bootloader %d, updating_config %d <\n",__func__, mxtdata->suspended, mxtdata->in_bootloader, mxtdata->updating_config);
         return 0;
     }
 
@@ -4220,7 +4238,7 @@ static int mxt_stop(struct mxt_data *mxtdata)
 
     mxtdata->suspended = true;
 
-    dev_info(&i2cclient->dev, "%s OK\n",__func__);
+    dev_info(&i2cclient->dev, "%s <\n",__func__);
 
     return 0;
 }
@@ -4230,7 +4248,7 @@ static int mxt_input_open(struct input_dev *inputdev)
     struct mxt_data *mxtdata = input_get_drvdata(inputdev);
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     ret_val = mxt_start(mxtdata);
 
@@ -4247,7 +4265,7 @@ static void mxt_input_close(struct input_dev *inputdev)
     struct mxt_data *mxtdata = input_get_drvdata(inputdev);
     int ret_val;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     ret_val = mxt_stop(mxtdata);
 
@@ -4316,7 +4334,7 @@ static const struct mxt_platform_data *mxt_platform_data_get_from_device_tree(st
 
     of_property_read_u32(devnode, "atmel,suspend-mode", &mxtplatform->suspend_mode);
 
-    dev_dbg(&i2cclient->dev, "%s OK\n", __func__);
+    dev_dbg(&i2cclient->dev, "%s <\n", __func__);
 
     return mxtplatform;
 }
@@ -4451,7 +4469,7 @@ static const struct mxt_platform_data *mxt_platform_data_get_from_acpi(struct i2
     {
         if (0 == strcmp(acpi_device_hid(adev), acpi_pdata->hid))
         {
-            dev_dbg(&i2cclient->dev, "%s OK\n", __func__);
+            dev_dbg(&i2cclient->dev, "%s <\n", __func__);
             return &acpi_pdata->mxtplatform;
         }
 
@@ -4476,9 +4494,8 @@ static struct mxt_platform_data *mxt_platform_data_get_default(struct i2c_client
     }
 
     /* Set default parameters */
-    mxtplatform->irqflags = IRQF_TRIGGER_FALLING;
 
-    dev_dbg(&i2cclient->dev, "%s OK\n", __func__);
+    dev_dbg(&i2cclient->dev, "%s <\n", __func__);
 
     return mxtplatform;
 }
@@ -4487,7 +4504,7 @@ static const struct mxt_platform_data * mxt_platform_data_get(struct i2c_client 
 {
     const struct mxt_platform_data *mxtplatform;
 
-    dev_dbg(&i2cclient->dev, "<< %s >>\n", __func__);
+    dev_dbg(&i2cclient->dev, "%s >\n", __func__);
 
     mxtplatform = dev_get_platdata(&i2cclient->dev);
     if (mxtplatform)
@@ -4557,6 +4574,8 @@ static int mxt_probe(struct i2c_client *i2cclient, const struct i2c_device_id *i
     struct mxt_data *mxtdata;
     const struct mxt_platform_data *mxtplatform;
     int ret_val;
+
+    dev_dbg(&i2cclient->dev, "%s >>>\n", __func__);
 
     mxtplatform = mxt_platform_data_get(i2cclient);
     if (IS_ERR(mxtplatform))
@@ -4636,7 +4655,7 @@ static int mxt_probe(struct i2c_client *i2cclient, const struct i2c_device_id *i
         goto err_free_irq;
     }
 
-    dev_info(&i2cclient->dev, "%s OK\n", __func__);
+    dev_info(&i2cclient->dev, "%s <\n", __func__);
     return 0;
 
 err_free_irq:
@@ -4664,7 +4683,7 @@ err_free_mem:
 static int mxt_remove(struct i2c_client *i2cclient)
 {
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
-    dev_info(&i2cclient->dev, "%s \n", __func__);
+    dev_info(&i2cclient->dev, "%s >\n", __func__);
 
     sysfs_remove_group(&i2cclient->dev.kobj, &mxt_fw_attr_group);
     mxt_sysfs_debug_msg_remove(mxtdata);
@@ -4699,7 +4718,7 @@ static int __maybe_unused mxt_suspend(struct device *dev)
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
     struct input_dev *inputdev = mxtdata->inputdev;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!inputdev)
     {
@@ -4724,7 +4743,7 @@ static int __maybe_unused mxt_resume(struct device *dev)
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
     struct input_dev *inputdev = mxtdata->inputdev;
 
-    dev_dbg(&mxtdata->i2cclient->dev, "%s\n", __func__);
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     if (!inputdev)
     {
