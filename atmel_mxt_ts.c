@@ -913,7 +913,7 @@ static struct mxt_object * mxt_get_object(struct mxt_data *mxtdata, u8 type)
     return NULL;
 }
 
-static void mxt_input_button(struct mxt_data *mxtdata, u8 *message)
+static void mxt_recv_t19_gpio_pwm_cfg(struct mxt_data *mxtdata, u8 *message)
 {
     struct input_dev *inputdev = mxtdata->inputdev;
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
@@ -982,7 +982,7 @@ static void mxt_recv_t6_command_processor(struct mxt_data *mxtdata, u8 *msg)
     }
 }
 
-static void mxt_proc_t15_messages(struct mxt_data *mxtdata, u8 *msg)
+static void mxt_recv_t15_key_array(struct mxt_data *mxtdata, u8 *msg)
 {
     struct input_dev *inputdev = mxtdata->inputdev;
     struct device *dev = &mxtdata->i2cclient->dev;
@@ -1020,16 +1020,6 @@ static void mxt_proc_t15_messages(struct mxt_data *mxtdata, u8 *msg)
     }
 }
 
-static void mxt_proc_t92_messages(struct mxt_data *mxtdata, u8 *msg)
-{
-    struct device *dev = &mxtdata->i2cclient->dev;
-    u8 status = msg[1];
-
-    dev_info(dev, "T92 long stroke LSTR=%d %d\n",
-             (status & 0x80) ? 1 : 0,
-             status & 0x0F);
-}
-
 static void mxt_recv_t93_touch_sequence(struct mxt_data *mxtdata, u8 *msg)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
@@ -1043,7 +1033,7 @@ static void mxt_recv_t93_touch_sequence(struct mxt_data *mxtdata, u8 *msg)
     input_sync(mxtdata->inputdev);
 }
 
-static void mxt_proc_t100_message(struct mxt_data *mxtdata, u8 *message)
+static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     struct input_dev *inputdev = mxtdata->inputdev;
@@ -1279,22 +1269,24 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
              * returning from suspend
              */
         }
+        else if (100 == object_number)
+        {
+            mxt_recv_t100_multiple_touch(mxtdata, message);
+        }
         else if (15 == object_number)
         {
-            mxt_proc_t15_messages(mxtdata, message);
+            mxt_recv_t15_key_array(mxtdata, message);
         }
         else if (19 == object_number)
         {
-            mxt_input_button(mxtdata, message);
+            mxt_recv_t19_gpio_pwm_cfg(mxtdata, message);
             mxtdata->update_input = true;
         }
         else if (92 == object_number)
         {
-            mxt_proc_t92_messages(mxtdata, message);
-        }
-        else if (100 == object_number)
-        {
-            mxt_proc_t100_message(mxtdata, message);
+            dev_info(&mxtdata->i2cclient->dev, "T92 long stroke LSTR=%d STRTYPE=%d\n",
+                message[1] & 0x80 ? 1 : 0,
+                message[1] & 0x0F);
         }
         else
         {
