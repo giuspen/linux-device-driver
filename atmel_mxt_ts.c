@@ -160,17 +160,19 @@ struct t7_config
 #define MXT_T100_TCHAUX_AMPL    (1 << 1)
 #define MXT_T100_TCHAUX_AREA    (1 << 2)
 #define MXT_T100_CFG_SWITCHXY   (1 << 5)
-#define MXT_T100_DETECT         (1 << 7)
-#define MXT_T100_TYPE_MASK          0x70
+#define MXT_T100_MSG_TCHSTATUS_DETECT_BIT     (1 << 7)
+#define MXT_T100_MSG_TCHSTATUS_TYPE_MASK          0x70
+#define MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET           4
 
-enum t100_type
+enum t100_touch_type
 {
-    MXT_T100_TYPE_FINGER            = 1,
-    MXT_T100_TYPE_PASSIVE_STYLUS    = 2,
-    MXT_T100_TYPE_ACTIVE_STYLUS     = 3,
-    MXT_T100_TYPE_HOVERING_FINGER   = 4,
-    MXT_T100_TYPE_GLOVE             = 5,
-    MXT_T100_TYPE_LARGE_TOUCH       = 6,
+    MXT_T100_TOUCH_TYPE_FINGER            = 1,
+    MXT_T100_TOUCH_TYPE_PASSIVE_STYLUS    = 2,
+    MXT_T100_TOUCH_TYPE_ACTIVE_STYLUS     = 3,
+    MXT_T100_TOUCH_TYPE_HOVERING_FINGER   = 4,
+    MXT_T100_TOUCH_TYPE_GLOVE             = 5,
+    MXT_T100_TOUCH_TYPE_LARGE_TOUCH       = 6,
+    MXT_T100_TOUCH_TYPE_EDGE_TOUCH        = 7,
 };
 
 #define MXT_DISTANCE_ACTIVE_TOUCH   0
@@ -926,9 +928,7 @@ static void mxt_recv_t19_gpio_pwm_cfg(struct mxt_data *mxtdata, u8 *message)
         if (mxtplatform->t19_keymap[i] != KEY_RESERVED)
         {
             /* Active-low switch */
-            input_report_key(inputdev,
-                             mxtplatform->t19_keymap[i],
-                             !(message[1] & BIT(i)));
+            input_report_key(inputdev, mxtplatform->t19_keymap[i], !(message[1] & BIT(i)));
         }
     }
 }
@@ -1000,16 +1000,14 @@ static void mxt_recv_t15_key_array(struct mxt_data *mxtdata, u8 *msg)
         {
             dev_dbg(dev, "T15 key press: %u\n", key);
             __set_bit(key, &mxtdata->t15_keystatus);
-            input_event(inputdev, EV_KEY,
-                        mxtdata->mxtplatform->t15_keymap[key], 1);
+            input_event(inputdev, EV_KEY, mxtdata->mxtplatform->t15_keymap[key], 1);
             sync = true;
         }
         else if (curr_state && !new_state)
         {
             dev_dbg(dev, "T15 key release: %u\n", key);
             __clear_bit(key, &mxtdata->t15_keystatus);
-            input_event(inputdev, EV_KEY,
-                        mxtdata->mxtplatform->t15_keymap[key], 0);
+            input_event(inputdev, EV_KEY, mxtdata->mxtplatform->t15_keymap[key], 0);
             sync = true;
         }
     }
@@ -1025,7 +1023,7 @@ static void mxt_recv_t93_touch_sequence(struct mxt_data *mxtdata, u8 *msg)
     struct device *dev = &mxtdata->i2cclient->dev;
     u8 status = msg[1];
 
-    dev_info(dev, "T93 double tap %d\n", status);
+    dev_dbg(dev, "T93 double tap %d\n", status);
 
     input_report_key(mxtdata->inputdev, KEY_WAKEUP, 1);
     input_sync(mxtdata->inputdev);
@@ -1033,13 +1031,39 @@ static void mxt_recv_t93_touch_sequence(struct mxt_data *mxtdata, u8 *msg)
     input_sync(mxtdata->inputdev);
 }
 
+#ifdef DEBUG
+static const char *get_t100_touch_type_str(u8 touch_type)
+{
+    switch (touch_type)
+    {
+        case MXT_T100_TOUCH_TYPE_FINGER:
+            return "Finger";
+        case MXT_T100_TOUCH_TYPE_PASSIVE_STYLUS:
+            return "Passive Stylus";
+        case MXT_T100_TOUCH_TYPE_ACTIVE_STYLUS:
+            return "Active Stylus";
+        case MXT_T100_TOUCH_TYPE_HOVERING_FINGER:
+            return "Hovering Finger";
+        case MXT_T100_TOUCH_TYPE_GLOVE:
+            return "Glove";
+        case MXT_T100_TOUCH_TYPE_LARGE_TOUCH:
+            return "Large Touch";
+        case MXT_T100_TOUCH_TYPE_EDGE_TOUCH:
+            return "Edge Touch";
+        default:
+            break;
+    }
+    return "???";
+}
+#endif
+
 static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     struct input_dev *inputdev = mxtdata->inputdev;
-    int id;
-    u8 status;
-    u8 type = 0;
+    int touch_id;
+    u8 tchstatus_byte;
+    u8 touch_type = 0;
     u16 x, y;
     int distance = 0;
     int tool = 0;
@@ -1049,33 +1073,34 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     bool active = false;
     bool hover = false;
 
-    id = message[0] - mxtdata->T100_reportid_min - 2;
-
-    /* ignore SCRSTATUS events */
-    if (id < 0)
+    // First Report ID is Screen Status Messages
+    // Second Report ID is Reserved
+    // Subsequent Report IDs are Touch Status Messages
+    touch_id = message[0] - mxtdata->T100_reportid_min - 2;
+    if (touch_id < 0)
     {
         return;
     }
 
-    status = message[1];
-    x = get_unaligned_le16(&message[2]);
-    y = get_unaligned_le16(&message[4]);
+    tchstatus_byte = message[1];
+    x = message[2] | message[3] << 8; // little endian 16
+    y = message[4] | message[5] << 8; // little endian 16
 
-    if (status & MXT_T100_DETECT)
+    if (tchstatus_byte & MXT_T100_MSG_TCHSTATUS_DETECT_BIT)
     {
-        type = (status & MXT_T100_TYPE_MASK) >> 4;
+        touch_type = (tchstatus_byte & MXT_T100_MSG_TCHSTATUS_TYPE_MASK) >> MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET;
 
-        switch (type)
+        switch (touch_type)
         {
-            case MXT_T100_TYPE_HOVERING_FINGER:
+            case MXT_T100_TOUCH_TYPE_HOVERING_FINGER:
                 tool = MT_TOOL_FINGER;
                 distance = MXT_DISTANCE_HOVERING;
                 hover = true;
                 active = true;
                 break;
 
-            case MXT_T100_TYPE_FINGER:
-            case MXT_T100_TYPE_GLOVE:
+            case MXT_T100_TOUCH_TYPE_FINGER:
+            case MXT_T100_TOUCH_TYPE_GLOVE:
                 tool = MT_TOOL_FINGER;
                 distance = MXT_DISTANCE_ACTIVE_TOUCH;
                 hover = false;
@@ -1098,7 +1123,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 
                 break;
 
-            case MXT_T100_TYPE_PASSIVE_STYLUS:
+            case MXT_T100_TOUCH_TYPE_PASSIVE_STYLUS:
                 tool = MT_TOOL_PEN;
                 distance = MXT_DISTANCE_ACTIVE_TOUCH;
                 hover = false;
@@ -1117,12 +1142,10 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 
                 break;
 
-            case MXT_T100_TYPE_ACTIVE_STYLUS:
+            case MXT_T100_TOUCH_TYPE_ACTIVE_STYLUS:
                 /* Report input buttons */
-                input_report_key(inputdev, BTN_STYLUS,
-                                 message[6] & MXT_T107_STYLUS_BUTTON0);
-                input_report_key(inputdev, BTN_STYLUS2,
-                                 message[6] & MXT_T107_STYLUS_BUTTON1);
+                input_report_key(inputdev, BTN_STYLUS, message[6] & MXT_T107_STYLUS_BUTTON0);
+                input_report_key(inputdev, BTN_STYLUS2, message[6] & MXT_T107_STYLUS_BUTTON1);
 
                 /* stylus in range, but position unavailable */
                 if (!(message[6] & MXT_T107_STYLUS_HOVER))
@@ -1147,12 +1170,16 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 
                 break;
 
-            case MXT_T100_TYPE_LARGE_TOUCH:
-                /* Ignore suppressed touch */
+            case MXT_T100_TOUCH_TYPE_LARGE_TOUCH:
+                dev_dbg(dev, "Ignored Suppressed Large Touch\n");
+                break;
+
+            case MXT_T100_TOUCH_TYPE_EDGE_TOUCH:
+                dev_err(dev, "T100 Edge Touch Not Managed Yet\n");
                 break;
 
             default:
-                dev_dbg(dev, "Unexpected T100 type\n");
+                dev_dbg(dev, "T100 Unexpected touch_type %d\n", touch_type);
                 return;
         }
     }
@@ -1166,12 +1193,15 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
         pressure = MXT_PRESSURE_DEFAULT;
     }
 
-    input_mt_slot(inputdev, id);
+    input_mt_slot(inputdev, touch_id);
 
     if (active)
     {
-        dev_dbg(dev, "[%u] type:%u x:%u y:%u a:%02X p:%02X v:%02X\n",
-                id, type, x, y, major, pressure, orientation);
+        dev_dbg(dev,
+                "[%u] %s (%u, %u) m:%02X p:%02X v:%02X\n",
+                touch_id,
+                get_t100_touch_type_str(touch_type),
+                x, y, major, pressure, orientation);
 
         input_mt_report_slot_state(inputdev, tool, true);
         input_report_abs(inputdev, ABS_MT_POSITION_X, x);
@@ -1184,7 +1214,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     }
     else
     {
-        dev_dbg(dev, "[%u] release\n", id);
+        dev_dbg(dev, "[%u] release\n", touch_id);
 
         /* close out slot */
         input_mt_report_slot_state(inputdev, 0, false);
@@ -1284,7 +1314,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         }
         else if (92 == object_number)
         {
-            dev_info(&mxtdata->i2cclient->dev, "T92 long stroke LSTR=%d STRTYPE=%d\n",
+            dev_dbg(&mxtdata->i2cclient->dev, "T92 long stroke LSTR=%d STRTYPE=%d\n",
                 message[1] & 0x80 ? 1 : 0,
                 message[1] & 0x0F);
         }
