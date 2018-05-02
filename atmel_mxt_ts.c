@@ -96,7 +96,6 @@ struct mxt_platform_data
 #define MXT_SPT_MESSAGECOUNT_T44                  44
 #define MXT_SPT_CTECONFIG_T46                     46
 #define MXT_PROCI_STYLUS_T47                      47
-#define MXT_PROCG_NOISESUPPRESSION_T48            48
 #define MXT_TOUCH_PROXKEY_T52                     52
 #define MXT_GEN_DATASOURCE_T53                    53
 #define MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71 71
@@ -372,7 +371,6 @@ struct mxt_data
     u16 T18_address;
     u8 T19_reportid;
     u16 T44_address;
-    u8 T48_reportid;
     u16 T92_address;
     u8 T92_reportid;
     u16 T93_address;
@@ -406,41 +404,6 @@ static size_t mxt_obj_size(const struct mxt_object *obj)
 static size_t mxt_obj_instances(const struct mxt_object *obj)
 {
     return obj->instances_minus_one + 1;
-}
-
-static bool mxt_object_readable(unsigned int type)
-{
-    switch (type)
-    {
-        case MXT_GEN_COMMAND_T6:
-        case MXT_GEN_POWER_T7:
-        case MXT_GEN_ACQUIRE_T8:
-        case MXT_TOUCH_MULTI_T9:
-        case MXT_TOUCH_KEYARRAY_T15:
-        case MXT_SPT_COMMSCONFIG_T18:
-        case MXT_SPT_GPIOPWM_T19:
-        case MXT_PROCI_GRIPFACE_T20:
-        case MXT_PROCG_NOISE_T22:
-        case MXT_TOUCH_PROXIMITY_T23:
-        case MXT_PROCI_ONETOUCH_T24:
-        case MXT_SPT_SELFTEST_T25:
-        case MXT_PROCI_TWOTOUCH_T27:
-        case MXT_SPT_CTECONFIG_T28:
-        case MXT_SPT_USERDATA_T38:
-        case MXT_PROCI_GRIP_T40:
-        case MXT_PROCI_PALM_T41:
-        case MXT_PROCI_TOUCHSUPPRESSION_T42:
-        case MXT_SPT_DIGITIZER_T43:
-        case MXT_SPT_CTECONFIG_T46:
-        case MXT_PROCI_STYLUS_T47:
-        case MXT_PROCG_NOISESUPPRESSION_T48:
-        case MXT_TOUCH_PROXKEY_T52:
-        case MXT_GEN_DATASOURCE_T53:
-        case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
-            return true;
-        default:
-            return false;
-    }
 }
 
 static void mxt_debug_msg_enable(struct mxt_data *mxtdata)
@@ -1194,24 +1157,6 @@ static void mxt_proc_t15_messages(struct mxt_data *mxtdata, u8 *msg)
     }
 }
 
-static int mxt_proc_t48_messages(struct mxt_data *mxtdata, u8 *msg)
-{
-    struct device *dev = &mxtdata->i2cclient->dev;
-    u8 status, state;
-
-    status = msg[1];
-    state  = msg[4];
-
-    dev_dbg(dev, "T48 state %d status %02X %s%s%s%s%s\n", state, status,
-            status & 0x01 ? "FREQCHG " : "",
-            status & 0x02 ? "APXCHG " : "",
-            status & 0x04 ? "ALGOERR " : "",
-            status & 0x10 ? "STATCHG " : "",
-            status & 0x20 ? "NLVLCHG " : "");
-
-    return 0;
-}
-
 static void mxt_proc_t92_messages(struct mxt_data *mxtdata, u8 *msg)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
@@ -1421,10 +1366,6 @@ static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report
     {
         ret_val = 19;
     }
-    else if (report_id == mxtdata->T48_reportid)
-    {
-        ret_val = 48;
-    }
     else if (report_id == mxtdata->T92_reportid)
     {
         ret_val = 92;
@@ -1466,10 +1407,6 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         if (6 == object_number)
         {
             mxt_recv_t6_command_processor(mxtdata, message);
-        }
-        else if (48 == object_number)
-        {
-            mxt_proc_t48_messages(mxtdata, message);
         }
         else if (93 == object_number)
         {
@@ -2338,7 +2275,6 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->T18_address = 0;
     mxtdata->T19_reportid = 0;
     mxtdata->T44_address = 0;
-    mxtdata->T48_reportid = 0;
     mxtdata->T92_reportid = 0;
     mxtdata->T92_address = 0;
     mxtdata->T93_reportid = 0;
@@ -2435,9 +2371,6 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
                 break;
             case MXT_SPT_GPIOPWM_T19:
                 mxtdata->T19_reportid = min_id;
-                break;
-            case MXT_PROCG_NOISESUPPRESSION_T48:
-                mxtdata->T48_reportid = min_id;
                 break;
             case MXT_PROCI_SYMBOLGESTUREPROCESSOR:
                 mxtdata->T92_reportid = min_id;
@@ -3310,7 +3243,7 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
                               mxtdata->T7_address,
                               sizeof(mxtdata->t7_cfg),
                               new_config);
-    if (!ret_val)
+    if (0 == ret_val)
     {
         dev_info(dev, "Set T7 ACTV:%d IDLE:%d\n", new_config->active, new_config->idle);
     }
@@ -3475,27 +3408,51 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
     for (i = 0; i < mxtdata->mxtinfo->object_num; i++)
     {
         object = mxtdata->object_table + i;
-
-        if (!mxt_object_readable(object->type))
+        switch (object->type)
         {
-            continue;
-        }
+            case MXT_GEN_COMMAND_T6:
+            case MXT_GEN_POWER_T7:
+            case MXT_GEN_ACQUIRE_T8:
+            case MXT_TOUCH_MULTI_T9:
+            case MXT_TOUCH_KEYARRAY_T15:
+            case MXT_SPT_COMMSCONFIG_T18:
+            case MXT_SPT_GPIOPWM_T19:
+            case MXT_PROCI_GRIPFACE_T20:
+            case MXT_PROCG_NOISE_T22:
+            case MXT_TOUCH_PROXIMITY_T23:
+            case MXT_PROCI_ONETOUCH_T24:
+            case MXT_SPT_SELFTEST_T25:
+            case MXT_PROCI_TWOTOUCH_T27:
+            case MXT_SPT_CTECONFIG_T28:
+            case MXT_SPT_USERDATA_T38:
+            case MXT_PROCI_GRIP_T40:
+            case MXT_PROCI_PALM_T41:
+            case MXT_PROCI_TOUCHSUPPRESSION_T42:
+            case MXT_SPT_DIGITIZER_T43:
+            case MXT_SPT_CTECONFIG_T46:
+            case MXT_PROCI_STYLUS_T47:
+            case MXT_TOUCH_PROXKEY_T52:
+            case MXT_GEN_DATASOURCE_T53:
+            case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
 
-        count += scnprintf(buf + count, PAGE_SIZE - count,
-                           "T%u:\n", object->type);
+                count += scnprintf(buf + count, PAGE_SIZE - count, "T%u:\n", object->type);
 
-        for (j = 0; j < mxt_obj_instances(object); j++)
-        {
-            u16 size = mxt_obj_size(object);
-            u16 addr = object->start_address + j * size;
+                for (j = 0; j < mxt_obj_instances(object); j++)
+                {
+                    u16 size = mxt_obj_size(object);
+                    u16 addr = object->start_address + j * size;
 
-            ret_val = mxt_read_blks(mxtdata, addr, size, obuf);
-            if (ret_val)
-            {
-                goto done;
-            }
+                    ret_val = mxt_read_blks(mxtdata, addr, size, obuf);
+                    if (ret_val)
+                    {
+                        goto done;
+                    }
 
-            count = mxt_show_instance(buf, count, object, j, obuf);
+                    count = mxt_show_instance(buf, count, object, j, obuf);
+                }
+                break;
+            default:
+                break;
         }
     }
 
