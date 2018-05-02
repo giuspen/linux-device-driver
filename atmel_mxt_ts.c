@@ -171,9 +171,6 @@ struct t9_range
 #define MXT_T6_CALIBRATE_VALUE 0x01
 #define MXT_T6_BACKUP_VALUE    0x55
 
-/* Define for MXT_PROCI_TOUCHSUPPRESSION_T42 */
-#define MXT_T42_MSG_TCHSUP  (1 << 0)
-
 /* T100 Multiple Touch Touchscreen */
 #define MXT_T100_CTRL_ENABLE    (1 << 0)
 #define MXT_T100_CTRL_RPTEN     (1 << 1)
@@ -374,8 +371,6 @@ struct mxt_data
     u8 T15_reportid_max;
     u16 T18_address;
     u8 T19_reportid;
-    u8 T42_reportid_min;
-    u8 T42_reportid_max;
     u16 T44_address;
     u8 T48_reportid;
     u16 T92_address;
@@ -1032,7 +1027,7 @@ static void mxt_input_sync(struct mxt_data *mxtdata)
     }
 }
 
-static void mxt_proc_t6_messages(struct mxt_data *mxtdata, u8 *msg)
+static void mxt_recv_t6_command_processor(struct mxt_data *mxtdata, u8 *msg)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     u8 status = msg[1];
@@ -1196,21 +1191,6 @@ static void mxt_proc_t15_messages(struct mxt_data *mxtdata, u8 *msg)
     if (sync)
     {
         input_sync(inputdev);
-    }
-}
-
-static void mxt_proc_t42_messages(struct mxt_data *mxtdata, u8 *msg)
-{
-    struct device *dev = &mxtdata->i2cclient->dev;
-    u8 status = msg[1];
-
-    if (status & MXT_T42_MSG_TCHSUP)
-    {
-        dev_info(dev, "T42 suppress\n");
-    }
-    else
-    {
-        dev_info(dev, "T42 normal\n");
     }
 }
 
@@ -1441,11 +1421,6 @@ static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report
     {
         ret_val = 19;
     }
-    else if (report_id >= mxtdata->T42_reportid_min &&
-             report_id <= mxtdata->T42_reportid_max)
-    {
-        ret_val = 42;
-    }
     else if (report_id == mxtdata->T48_reportid)
     {
         ret_val = 48;
@@ -1490,11 +1465,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         dev_dbg(&mxtdata->i2cclient->dev, "-> %c%d\n", no_inputdev_or_suspended ? 't':'T', object_number);
         if (6 == object_number)
         {
-            mxt_proc_t6_messages(mxtdata, message);
-        }
-        else if (42 == object_number)
-        {
-            mxt_proc_t42_messages(mxtdata, message);
+            mxt_recv_t6_command_processor(mxtdata, message);
         }
         else if (48 == object_number)
         {
@@ -1766,7 +1737,7 @@ static irqreturn_t mxt_interrupt(int irq, void *dev_id)
     return mxt_process_messages(mxtdata);
 }
 
-static int mxt_t6_command(struct mxt_data *mxtdata, u16 cmd_offset, u8 cmd_value, bool wait)
+static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offset, u8 cmd_value, bool wait)
 {
     u16 reg;
     u8 command_register;
@@ -1820,7 +1791,7 @@ static int mxt_soft_reset(struct mxt_data *mxtdata)
 
     reinit_completion(&mxtdata->reset_completion);
 
-    ret_val = mxt_t6_command(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_RESET_VALUE, false/*wait*/);
+    ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_RESET_VALUE, false/*wait*/);
     if (ret_val)
     {
         return ret_val;
@@ -1850,7 +1821,7 @@ static void mxt_update_crc(struct mxt_data *mxtdata, u8 t6_cmd_offset, u8 t6_cmd
     mxtdata->config_crc = 0;
     reinit_completion(&mxtdata->crc_completion);
 
-    (void)mxt_t6_command(mxtdata, t6_cmd_offset, t6_cmd_value, true/*wait*/);
+    (void)mxt_send_t6_command_processor(mxtdata, t6_cmd_offset, t6_cmd_value, true/*wait*/);
 
     /*
      * Wait for crc message
@@ -2366,8 +2337,6 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->T15_reportid_max = 0;
     mxtdata->T18_address = 0;
     mxtdata->T19_reportid = 0;
-    mxtdata->T42_reportid_min = 0;
-    mxtdata->T42_reportid_max = 0;
     mxtdata->T44_address = 0;
     mxtdata->T48_reportid = 0;
     mxtdata->T92_reportid = 0;
@@ -2460,10 +2429,6 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
                 break;
             case MXT_SPT_COMMSCONFIG_T18:
                 mxtdata->T18_address = object->start_address;
-                break;
-            case MXT_PROCI_TOUCHSUPPRESSION_T42:
-                mxtdata->T42_reportid_min = min_id;
-                mxtdata->T42_reportid_max = max_id;
                 break;
             case MXT_SPT_MESSAGECOUNT_T44:
                 mxtdata->T44_address = object->start_address;
@@ -3659,7 +3624,7 @@ static int mxt_enter_bootloader(struct mxt_data *mxtdata)
         disable_irq(mxtdata->irq);
 
         /* Change to the bootloader mode */
-        ret_val = mxt_t6_command(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_BOOT_VALUE, false/*wait*/);
+        ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_BOOT_VALUE, false/*wait*/);
         if (ret_val)
         {
             return ret_val;
@@ -4189,7 +4154,7 @@ static int mxt_start(struct mxt_data *mxtdata)
             mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CTRL_ENABLE | MXT_T100_CTRL_RPTEN | MXT_T100_CTRL_DISSCRMSG | MXT_T100_CTRL_SCANEN));
 
             /* Recalibrate since chip has been in deep sleep */
-            ret_val = mxt_t6_command(mxtdata, MXT_T6_COMMAND_CALIBRATE, MXT_T6_CALIBRATE_VALUE, false/*wait*/);
+            ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_CALIBRATE, MXT_T6_CALIBRATE_VALUE, false/*wait*/);
             if (ret_val)
             {
                 return ret_val;
