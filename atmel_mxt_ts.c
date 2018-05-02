@@ -41,7 +41,6 @@
 enum mxt_suspend_mode
 {
     MXT_SUSPEND_DEEP_SLEEP = 0,
-    MXT_SUSPEND_T9_CTRL    = 1,
     MXT_SUSPEND_REGULATOR  = 2,
 };
 
@@ -77,7 +76,6 @@ struct mxt_platform_data
 #define MXT_GEN_COMMAND_T6                         6
 #define MXT_GEN_POWER_T7                           7
 #define MXT_GEN_ACQUIRE_T8                         8
-#define MXT_TOUCH_MULTI_T9                         9
 #define MXT_TOUCH_KEYARRAY_T15                    15
 #define MXT_SPT_COMMSCONFIG_T18                   18
 #define MXT_SPT_GPIOPWM_T19                       19
@@ -133,30 +131,6 @@ struct t7_config
 #define MXT_POWER_CFG_DEEPSLEEP 1
 #define MXT_POWER_CFG_POWERSAVE 2
 #define MXT_POWER_CFG_GESTURE   3
-
-/* MXT_TOUCH_MULTI_T9 field */
-#define MXT_T9_CTRL         0
-#define MXT_T9_ORIENT       9
-#define MXT_T9_RANGE       18
-
-/* MXT_TOUCH_MULTI_T9 status */
-#define MXT_T9_UNGRIP       (1 << 0)
-#define MXT_T9_SUPPRESS     (1 << 1)
-#define MXT_T9_AMP          (1 << 2)
-#define MXT_T9_VECTOR       (1 << 3)
-#define MXT_T9_MOVE         (1 << 4)
-#define MXT_T9_RELEASE      (1 << 5)
-#define MXT_T9_PRESS        (1 << 6)
-#define MXT_T9_DETECT       (1 << 7)
-
-struct t9_range
-{
-    __le16 x;
-    __le16 y;
-} __packed;
-
-/* MXT_TOUCH_MULTI_T9 orient */
-#define MXT_T9_ORIENT_SWITCH    (1 << 0)
 
 /* MXT_SPT_COMMSCONFIG_T18 */
 #define MXT_COMMS_CTRL      0
@@ -364,8 +338,6 @@ struct mxt_data
     u16 T8_address;
     u8 T8_msg_size;
     u16 T71_address;
-    u8 T9_reportid_min;
-    u8 T9_reportid_max;
     u8 T15_reportid_min;
     u8 T15_reportid_max;
     u16 T18_address;
@@ -941,23 +913,6 @@ static struct mxt_object * mxt_get_object(struct mxt_data *mxtdata, u8 type)
     return NULL;
 }
 
-static int mxt_write_object(struct mxt_data *mxtdata, u8 type, u8 offset, u8 val)
-{
-    struct mxt_object *object;
-    u16 reg;
-
-    dev_dbg(&mxtdata->i2cclient->dev, "%s %d %d %d >\n", __func__, type, offset, val);
-
-    object = mxt_get_object(mxtdata, type);
-    if (NULL == object || offset >= mxt_obj_size(object))
-    {
-        return -EINVAL;
-    }
-
-    reg = object->start_address;
-    return mxt_write_reg(mxtdata->i2cclient, reg + offset, val);
-}
-
 static void mxt_input_button(struct mxt_data *mxtdata, u8 *message)
 {
     struct input_dev *inputdev = mxtdata->inputdev;
@@ -1027,98 +982,6 @@ static void mxt_recv_t6_command_processor(struct mxt_data *mxtdata, u8 *msg)
     }
 }
 
-static void mxt_proc_t9_message(struct mxt_data *mxtdata, u8 *message)
-{
-    struct device *dev = &mxtdata->i2cclient->dev;
-    struct input_dev *inputdev = mxtdata->inputdev;
-    int id;
-    u8 status;
-    int x, y, area, amplitude;
-    u8 vector;
-    int tool;
-
-    id = message[0] - mxtdata->T9_reportid_min;
-    status = message[1];
-    x = (message[2] << 4) | ((message[4] >> 4) & 0xf);
-    y = (message[3] << 4) | ((message[4] & 0xf));
-
-    /* Handle 10/12 bit switching */
-    if (mxtdata->max_x < 1024)
-    {
-        x >>= 2;
-    }
-    if (mxtdata->max_y < 1024)
-    {
-        y >>= 2;
-    }
-
-    area = message[5];
-
-    amplitude = message[6];
-    vector = message[7];
-
-    dev_dbg(dev,
-            "[%u] %c%c%c%c%c%c%c%c x: %5u y: %5u area: %3u amp: %3u vector: %02X\n",
-            id,
-            (status & MXT_T9_DETECT) ? 'D' : '.',
-            (status & MXT_T9_PRESS) ? 'P' : '.',
-            (status & MXT_T9_RELEASE) ? 'R' : '.',
-            (status & MXT_T9_MOVE) ? 'M' : '.',
-            (status & MXT_T9_VECTOR) ? 'V' : '.',
-            (status & MXT_T9_AMP) ? 'A' : '.',
-            (status & MXT_T9_SUPPRESS) ? 'S' : '.',
-            (status & MXT_T9_UNGRIP) ? 'U' : '.',
-            x, y, area, amplitude, vector);
-
-    input_mt_slot(inputdev, id);
-
-    if (status & MXT_T9_DETECT)
-    {
-        /*
-         * Multiple bits may be set if the host is slow to read
-         * the status messages, indicating all the events that
-         * have happened.
-         */
-        if (status & MXT_T9_RELEASE)
-        {
-            input_mt_report_slot_state(inputdev, 0, false);
-            mxt_input_sync(mxtdata);
-        }
-
-        /* A size of zero indicates touch is from a linked T47 Stylus */
-        if (area == 0)
-        {
-            area = MXT_TOUCH_MAJOR_DEFAULT;
-            tool = MT_TOOL_PEN;
-        }
-        else
-        {
-            tool = MT_TOOL_FINGER;
-        }
-
-        /* if active, pressure must be non-zero */
-        if (!amplitude)
-        {
-            amplitude = MXT_PRESSURE_DEFAULT;
-        }
-
-        /* Touch active */
-        input_mt_report_slot_state(inputdev, tool, true);
-        input_report_abs(inputdev, ABS_MT_POSITION_X, x);
-        input_report_abs(inputdev, ABS_MT_POSITION_Y, y);
-        input_report_abs(inputdev, ABS_MT_PRESSURE, amplitude);
-        input_report_abs(inputdev, ABS_MT_TOUCH_MAJOR, area);
-        input_report_abs(inputdev, ABS_MT_ORIENTATION, vector);
-    }
-    else
-    {
-        /* Touch no longer active, close out slot */
-        input_mt_report_slot_state(inputdev, 0, false);
-    }
-
-    mxtdata->update_input = true;
-}
-
 static void mxt_proc_t15_messages(struct mxt_data *mxtdata, u8 *msg)
 {
     struct input_dev *inputdev = mxtdata->inputdev;
@@ -1167,17 +1030,12 @@ static void mxt_proc_t92_messages(struct mxt_data *mxtdata, u8 *msg)
              status & 0x0F);
 }
 
-static void mxt_proc_t93_messages(struct mxt_data *mxtdata, u8 *msg)
+static void mxt_recv_t93_touch_sequence(struct mxt_data *mxtdata, u8 *msg)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     u8 status = msg[1];
 
-    dev_info(dev, "T93 report double tap %d\n", status);
-
-    if(NULL == mxtdata->inputdev)
-    {
-        return;
-    }
+    dev_info(dev, "T93 double tap %d\n", status);
 
     input_report_key(mxtdata->inputdev, KEY_WAKEUP, 1);
     input_sync(mxtdata->inputdev);
@@ -1352,11 +1210,6 @@ static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report
     {
         ret_val = 6;
     }
-    else if (report_id >= mxtdata->T9_reportid_min &&
-             report_id <= mxtdata->T9_reportid_max)
-    {
-        ret_val = 9;
-    }
     else if (report_id >= mxtdata->T15_reportid_min &&
              report_id <= mxtdata->T15_reportid_max)
     {
@@ -1408,20 +1261,23 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         {
             mxt_recv_t6_command_processor(mxtdata, message);
         }
-        else if (93 == object_number)
-        {
-            mxt_proc_t93_messages(mxtdata, message);
-        }
-        else if (no_inputdev_or_suspended)
+        else if (!mxtdata->inputdev)
         {
             /*
-             * Do not report events if input device is not
-             * yet registered or returning from suspend
+             * Do not report events if input device is
+             * not yet registered
              */
         }
-        else if (9 == object_number)
+        else if (93 == object_number)
         {
-            mxt_proc_t9_message(mxtdata, message);
+            mxt_recv_t93_touch_sequence(mxtdata, message);
+        }
+        else if (mxtdata->suspended)
+        {
+            /*
+             * Do not report events if input device is
+             * returning from suspend
+             */
         }
         else if (15 == object_number)
         {
@@ -2268,8 +2124,6 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->T8_address = 0;
     mxtdata->T8_msg_size=0;
     mxtdata->T71_address = 0;
-    mxtdata->T9_reportid_min = 0;
-    mxtdata->T9_reportid_max = 0;
     mxtdata->T15_reportid_min = 0;
     mxtdata->T15_reportid_max = 0;
     mxtdata->T18_address = 0;
@@ -2351,13 +2205,6 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
                 break;
             case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
                 mxtdata->T71_address = object->start_address;
-                break;
-            case MXT_TOUCH_MULTI_T9:
-                mxtdata->multitouch = MXT_TOUCH_MULTI_T9;
-                /* Only handle messages from first T9 instance */
-                mxtdata->T9_reportid_min = min_id;
-                mxtdata->T9_reportid_max = min_id + object->num_report_ids - 1;
-                mxtdata->num_touchids = object->num_report_ids;
                 break;
             case MXT_TOUCH_KEYARRAY_T15:
                 mxtdata->T15_reportid_min = min_id;
@@ -2632,46 +2479,6 @@ fail:
     return ret_val;
 }
 
-static int mxt_read_t9_resolution(struct mxt_data *mxtdata)
-{
-    struct i2c_client *i2cclient = mxtdata->i2cclient;
-    int ret_val;
-    struct t9_range range;
-    unsigned char orient;
-    struct mxt_object *object;
-
-    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
-
-    object = mxt_get_object(mxtdata, MXT_TOUCH_MULTI_T9);
-    if (!object)
-    {
-        return -EINVAL;
-    }
-
-    ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T9_RANGE,
-                             sizeof(range), &range);
-    if (ret_val)
-    {
-        return ret_val;
-    }
-
-    mxtdata->max_x = get_unaligned_le16(&range.x);
-    mxtdata->max_y = get_unaligned_le16(&range.y);
-
-    ret_val =  __mxt_read_reg(i2cclient,
-                              object->start_address + MXT_T9_ORIENT,
-                              1, &orient);
-    if (ret_val)
-    {
-        return ret_val;
-    }
-
-    mxtdata->xy_switch = orient & MXT_T9_ORIENT_SWITCH;
-
-    return 0;
-}
-
 static int mxt_set_up_active_stylus(struct input_dev *inputdev,
                                     struct mxt_data *mxtdata)
 {
@@ -2852,29 +2659,19 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     dev_dbg(dev, "%s >\n", __func__);
 
-    switch (mxtdata->multitouch)
+    if (MXT_TOUCH_MULTITOUCHSCREEN_T100 == mxtdata->multitouch)
     {
-        case MXT_TOUCH_MULTI_T9:
-            num_mt_slots = mxtdata->T9_reportid_max - mxtdata->T9_reportid_min + 1;
-            ret_val = mxt_read_t9_resolution(mxtdata);
-            if (ret_val)
-            {
-                dev_warn(dev, "Failed to initialize T9 resolution\n");
-            }
-            break;
-
-        case MXT_TOUCH_MULTITOUCHSCREEN_T100:
-            num_mt_slots = mxtdata->num_touchids;
-            ret_val = mxt_read_t100_config(mxtdata);
-            if (ret_val)
-            {
-                dev_warn(dev, "Failed to read T100 config\n");
-            }
-            break;
-
-        default:
-            dev_err(dev, "Invalid multitouch object\n");
-            return -EINVAL;
+        num_mt_slots = mxtdata->num_touchids;
+        ret_val = mxt_read_t100_config(mxtdata);
+        if (ret_val)
+        {
+            dev_warn(dev, "Failed to read T100 config\n");
+        }
+    }
+    else
+    {
+        dev_err(dev, "Invalid multitouch object\n");
+        return -EINVAL;
     }
 
     /* Handle default values and orientation switch */
@@ -2927,9 +2724,8 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     input_set_abs_params(inputdev, ABS_X, 0, mxtdata->max_x, 0, 0);
     input_set_abs_params(inputdev, ABS_Y, 0, mxtdata->max_y, 0, 0);
 
-    if ( mxtdata->multitouch == MXT_TOUCH_MULTI_T9 ||
-         (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-          mxtdata->t100_aux_ampl) )
+    if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
+        mxtdata->t100_aux_ampl)
     {
         input_set_abs_params(inputdev, ABS_PRESSURE, 0, 255, 0, 0);
     }
@@ -2968,17 +2764,15 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     input_set_abs_params(inputdev, ABS_MT_POSITION_Y,
                          0, mxtdata->max_y, 0, 0);
 
-    if (mxtdata->multitouch == MXT_TOUCH_MULTI_T9 ||
-            (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-             mxtdata->t100_aux_area))
+    if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
+        mxtdata->t100_aux_area)
     {
         input_set_abs_params(inputdev, ABS_MT_TOUCH_MAJOR,
                              0, MXT_MAX_AREA, 0, 0);
     }
 
-    if (mxtdata->multitouch == MXT_TOUCH_MULTI_T9 ||
-            (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-             (mxtdata->t100_aux_ampl || mxtdata->stylus_aux_pressure)))
+    if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
+        (mxtdata->t100_aux_ampl || mxtdata->stylus_aux_pressure))
     {
         input_set_abs_params(inputdev, ABS_MT_PRESSURE,
                              0, 255, 0, 0);
@@ -2991,9 +2785,8 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
                              0, 255, 0, 0);
     }
 
-    if (mxtdata->multitouch == MXT_TOUCH_MULTI_T9 ||
-            (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-             mxtdata->t100_aux_vect))
+    if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
+        mxtdata->t100_aux_vect)
     {
         input_set_abs_params(inputdev, ABS_MT_ORIENTATION,
                              0, 255, 0, 0);
@@ -3413,7 +3206,6 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
             case MXT_GEN_COMMAND_T6:
             case MXT_GEN_POWER_T7:
             case MXT_GEN_ACQUIRE_T8:
-            case MXT_TOUCH_MULTI_T9:
             case MXT_TOUCH_KEYARRAY_T15:
             case MXT_SPT_COMMSCONFIG_T18:
             case MXT_SPT_GPIOPWM_T19:
@@ -4082,14 +3874,6 @@ static int mxt_start(struct mxt_data *mxtdata)
 
     switch (mxtdata->mxtplatform->suspend_mode)
     {
-        case MXT_SUSPEND_T9_CTRL:
-            mxt_soft_reset(mxtdata);
-
-            /* Touch enable */
-            /* 0x83 = SCANEN | RPTEN | ENABLE */
-            mxt_write_object(mxtdata, MXT_TOUCH_MULTI_T9, MXT_T9_CTRL, 0x83);
-            break;
-
         case MXT_SUSPEND_REGULATOR:
             enable_irq(mxtdata->irq);
             mxt_regulator_enable(mxtdata);
@@ -4157,16 +3941,6 @@ static int mxt_stop(struct mxt_data *mxtdata)
 
     switch (mxtdata->mxtplatform->suspend_mode)
     {
-        case MXT_SUSPEND_T9_CTRL:
-            /* Touch disable */
-            ret_val = mxt_write_object(mxtdata, MXT_TOUCH_MULTI_T9, MXT_T9_CTRL, 0);
-            if (ret_val)
-            {
-                return ret_val;
-            }
-
-            break;
-
         case MXT_SUSPEND_REGULATOR:
             disable_irq(mxtdata->irq);
             mxt_regulator_disable(mxtdata);
