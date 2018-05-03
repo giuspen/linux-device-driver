@@ -168,6 +168,8 @@ struct t7_config
 #define MXT_T100_MSG_TCHSTATUS_TYPE_MASK          0x70
 #define MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET           4
 
+#define MXT_T100_MSG_AUXDATA_OFFSET                  6
+
 enum t100_touch_type
 {
     MXT_T100_TOUCH_TYPE_FINGER            = 1,
@@ -185,15 +187,16 @@ enum t100_touch_type
 #define MXT_TOUCH_MAJOR_DEFAULT           1
 #define MXT_TOUCH_PRESSURE_DEFAULT        1
 
-/* Gen2 Active Stylus */
-#define MXT_T107_STYLUS_STYAUX              42
-#define MXT_T107_STYLUS_STYAUX_PRESSURE BIT(0)
-#define MXT_T107_STYLUS_STYAUX_PEAK     BIT(4)
+/* Active Stylus */
+#define MXT_T107_CFG_STYAUX_OFFSET           37
+#define MXT_T107_CFG_STYAUX_PRS_BIT    (1 << 0)
+#define MXT_T107_CFG_STYAUX_XPEAK_BIT  (1 << 6)
+#define MXT_T107_CFG_STYAUX_YPEAK_BIT  (1 << 7)
 
-#define MXT_T107_STYLUS_HOVER       BIT(0)
-#define MXT_T107_STYLUS_TIPSWITCH   BIT(1)
-#define MXT_T107_STYLUS_BUTTON0     BIT(2)
-#define MXT_T107_STYLUS_BUTTON1     BIT(3)
+#define MXT_T100_MSG_AUXDATA0_T107_HOVER_BIT      (1 << 0)
+#define MXT_T100_MSG_AUXDATA0_T107_TIPSWITCH_BIT  (1 << 1)
+#define MXT_T100_MSG_AUXDATA0_T107_BUTTON0_BIT    (1 << 2)
+#define MXT_T100_MSG_AUXDATA0_T107_BUTTON1_BIT    (1 << 3)
 
 /* Delay times */
 #define MXT_RESET_TIME       200 /* msec */
@@ -326,7 +329,8 @@ struct mxt_data
     struct t7_config t7_cfg;
     unsigned long t15_keystatus;
     u8 t100_stylus_aux_pressure_idx;
-    u8 t100_stylus_aux_peak_idx;
+    u8 t100_stylus_aux_xpeak_idx;
+    u8 t100_stylus_aux_ypeak_idx;
     bool use_retrigen_workaround;
     u8 double_tap_enable;
     struct regulator *reg_vdd;
@@ -1114,17 +1118,14 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 {
                     touch_contact_major_axis = message[mxtdata->t100_aux_area_idx];
                 }
-
                 if (mxtdata->t100_aux_ampl_idx)
                 {
                     touch_pressure = message[mxtdata->t100_aux_ampl_idx];
                 }
-
                 if (mxtdata->t100_aux_vect_idx)
                 {
                     touch_orientation = message[mxtdata->t100_aux_vect_idx];
                 }
-
                 break;
 
             case MXT_T100_TOUCH_TYPE_PASSIVE_STYLUS:
@@ -1143,16 +1144,18 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 {
                     touch_pressure = message[mxtdata->t100_aux_ampl_idx];
                 }
-
                 break;
 
             case MXT_T100_TOUCH_TYPE_ACTIVE_STYLUS:
+            {
+                u8 auxdata0_byte = message[MXT_T100_MSG_AUXDATA_OFFSET];
+
                 /* Report input buttons */
-                input_report_key(inputdev, BTN_STYLUS, message[6] & MXT_T107_STYLUS_BUTTON0);
-                input_report_key(inputdev, BTN_STYLUS2, message[6] & MXT_T107_STYLUS_BUTTON1);
+                input_report_key(inputdev, BTN_STYLUS, auxdata0_byte & MXT_T100_MSG_AUXDATA0_T107_BUTTON0_BIT);
+                input_report_key(inputdev, BTN_STYLUS2, auxdata0_byte & MXT_T100_MSG_AUXDATA0_T107_BUTTON1_BIT);
 
                 /* stylus in range, but position unavailable */
-                if (!(message[6] & MXT_T107_STYLUS_HOVER))
+                if (0 == (auxdata0_byte & MXT_T100_MSG_AUXDATA0_T107_HOVER_BIT))
                 {
                     break;
                 }
@@ -1162,7 +1165,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 is_active = true;
                 touch_contact_major_axis = MXT_TOUCH_MAJOR_DEFAULT;
 
-                if (!(message[6] & MXT_T107_STYLUS_TIPSWITCH))
+                if (0 == (auxdata0_byte & MXT_T100_MSG_AUXDATA0_T107_TIPSWITCH_BIT))
                 {
                     is_hover = true;
                     touch_distance = MXT_TOUCH_DISTANCE_HOVERING;
@@ -1171,9 +1174,8 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 {
                     touch_pressure = message[mxtdata->t100_stylus_aux_pressure_idx];
                 }
-
                 break;
-
+            }
             case MXT_T100_TOUCH_TYPE_LARGE_TOUCH:
                 dev_dbg(dev, "Ignored Suppressed Large Touch\n");
                 break;
@@ -1183,7 +1185,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 break;
 
             default:
-                dev_dbg(dev, "T100 Unexpected touch_mxt_type %d\n", touch_mxt_type);
+                dev_err(dev, "T100 Unexpected touch_mxt_type %d\n", touch_mxt_type);
                 return;
         }
     }
@@ -2512,9 +2514,9 @@ static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, str
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
     struct mxt_object *object;
-    u8 styaux;
+    u8 styaux_byte;
     int t100_msg_aux_byte_idx;
-    u8 ctrl;
+    u8 ctrl_byte;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
@@ -2524,37 +2526,39 @@ static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, str
         return 0;
     }
 
-    ret_val = __mxt_read_reg(i2cclient, object->start_address, 1, &ctrl);
+    ret_val = __mxt_read_reg(i2cclient, object->start_address, 1, &ctrl_byte);
     if (ret_val)
     {
         return ret_val;
     }
 
     /* Check enable bit */
-    if (!(ctrl & 0x01))
+    if (!(ctrl_byte & 0x01))
     {
         return 0;
     }
 
     ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T107_STYLUS_STYAUX,
-                             1, &styaux);
+                             object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
+                             1, &styaux_byte);
     if (ret_val)
     {
         return ret_val;
     }
 
-    /* map aux bits */
-    t100_msg_aux_byte_idx = 7;
-
-    if (styaux & MXT_T107_STYLUS_STYAUX_PRESSURE)
+    /* map aux bits - the first aux of t100 msg is fixed for t107 */
+    t100_msg_aux_byte_idx = MXT_T100_MSG_AUXDATA_OFFSET+1;
+    if (styaux_byte & MXT_T107_CFG_STYAUX_PRS_BIT)
     {
         mxtdata->t100_stylus_aux_pressure_idx = t100_msg_aux_byte_idx++;
     }
-
-    if (styaux & MXT_T107_STYLUS_STYAUX_PEAK)
+    if (styaux_byte & MXT_T107_CFG_STYAUX_XPEAK_BIT)
     {
-        mxtdata->t100_stylus_aux_peak_idx = t100_msg_aux_byte_idx++;
+        mxtdata->t100_stylus_aux_xpeak_idx = t100_msg_aux_byte_idx++;
+    }
+    if (styaux_byte & MXT_T107_CFG_STYAUX_YPEAK_BIT)
+    {
+        mxtdata->t100_stylus_aux_ypeak_idx = t100_msg_aux_byte_idx++;
     }
 
     input_set_capability(inputdev, EV_KEY, BTN_STYLUS);
@@ -2562,8 +2566,8 @@ static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, str
     input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
 
     dev_dbg(&i2cclient->dev,
-            "T107 active stylus, aux map pressure:%u peak:%u\n",
-            mxtdata->t100_stylus_aux_pressure_idx, mxtdata->t100_stylus_aux_peak_idx);
+            "T107 on T100 aux - pressure:%u xpeak:%u ypeak:%u\n",
+            mxtdata->t100_stylus_aux_pressure_idx, mxtdata->t100_stylus_aux_xpeak_idx, mxtdata->t100_stylus_aux_ypeak_idx);
 
     return 0;
 }
@@ -2617,7 +2621,6 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
 
     mxtdata->xy_switch = cfg1_byte & MXT_T100_CFG_CFG1_SWITCHXY_BIT;
 
-    /* allocate aux bytes */
     ret_val =  __mxt_read_reg(i2cclient,
                               object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
                               1, &tchaux_byte);
@@ -2626,18 +2629,16 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
         return ret_val;
     }
 
-    t100_msg_aux_byte_idx = 6;
-
+    /* map aux bits */
+    t100_msg_aux_byte_idx = MXT_T100_MSG_AUXDATA_OFFSET;
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_VECT_BIT)
     {
         mxtdata->t100_aux_vect_idx = t100_msg_aux_byte_idx++;
     }
-
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_AMPL_BIT)
     {
         mxtdata->t100_aux_ampl_idx = t100_msg_aux_byte_idx++;
     }
-
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_AREA_BIT)
     {
         mxtdata->t100_aux_area_idx = t100_msg_aux_byte_idx++;
