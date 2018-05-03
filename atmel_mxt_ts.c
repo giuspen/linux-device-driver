@@ -175,11 +175,11 @@ enum t100_touch_type
     MXT_T100_TOUCH_TYPE_EDGE_TOUCH        = 7,
 };
 
-#define MXT_DISTANCE_ACTIVE_TOUCH   0
-#define MXT_DISTANCE_HOVERING       1
+#define MXT_TOUCH_DISTANCE_ACTIVE_TOUCH   0
+#define MXT_TOUCH_DISTANCE_HOVERING       1
 
-#define MXT_TOUCH_MAJOR_DEFAULT     1
-#define MXT_PRESSURE_DEFAULT        1
+#define MXT_TOUCH_MAJOR_DEFAULT           1
+#define MXT_TOUCH_PRESSURE_DEFAULT        1
 
 /* Gen2 Active Stylus */
 #define MXT_T107_STYLUS_STYAUX              42
@@ -1061,23 +1061,23 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     struct input_dev *inputdev = mxtdata->inputdev;
-    int touch_id;
+    int touch_id_slot;
     u8 tchstatus_byte;
-    u8 touch_type = 0;
+    u8 touch_mxt_type = 0;
     u16 x, y;
-    int distance = 0;
-    int tool = 0;
-    u8 major = 0;
-    u8 pressure = 0;
-    u8 orientation = 0;
-    bool active = false;
-    bool hover = false;
+    int touch_distance = 0;
+    int touch_tool_type = 0;
+    u8 touch_contact_major_axis = 0;
+    u8 touch_pressure = 0;
+    u8 touch_orientation = 0;
+    bool is_active = false;
+    bool is_hover = false;
 
     // First Report ID is Screen Status Messages
     // Second Report ID is Reserved
     // Subsequent Report IDs are Touch Status Messages
-    touch_id = message[0] - mxtdata->T100_reportid_min - 2;
-    if (touch_id < 0)
+    touch_id_slot = message[0] - mxtdata->T100_reportid_min - 2;
+    if (touch_id_slot < 0)
     {
         return;
     }
@@ -1088,56 +1088,56 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 
     if (tchstatus_byte & MXT_T100_MSG_TCHSTATUS_DETECT_BIT)
     {
-        touch_type = (tchstatus_byte & MXT_T100_MSG_TCHSTATUS_TYPE_MASK) >> MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET;
+        touch_mxt_type = (tchstatus_byte & MXT_T100_MSG_TCHSTATUS_TYPE_MASK) >> MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET;
 
-        switch (touch_type)
+        switch (touch_mxt_type)
         {
             case MXT_T100_TOUCH_TYPE_HOVERING_FINGER:
-                tool = MT_TOOL_FINGER;
-                distance = MXT_DISTANCE_HOVERING;
-                hover = true;
-                active = true;
+                touch_tool_type = MT_TOOL_FINGER;
+                touch_distance = MXT_TOUCH_DISTANCE_HOVERING;
+                is_hover = true;
+                is_active = true;
                 break;
 
             case MXT_T100_TOUCH_TYPE_FINGER:
             case MXT_T100_TOUCH_TYPE_GLOVE:
-                tool = MT_TOOL_FINGER;
-                distance = MXT_DISTANCE_ACTIVE_TOUCH;
-                hover = false;
-                active = true;
+                touch_tool_type = MT_TOOL_FINGER;
+                touch_distance = MXT_TOUCH_DISTANCE_ACTIVE_TOUCH;
+                is_hover = false;
+                is_active = true;
 
                 if (mxtdata->t100_aux_area)
                 {
-                    major = message[mxtdata->t100_aux_area];
+                    touch_contact_major_axis = message[mxtdata->t100_aux_area];
                 }
 
                 if (mxtdata->t100_aux_ampl)
                 {
-                    pressure = message[mxtdata->t100_aux_ampl];
+                    touch_pressure = message[mxtdata->t100_aux_ampl];
                 }
 
                 if (mxtdata->t100_aux_vect)
                 {
-                    orientation = message[mxtdata->t100_aux_vect];
+                    touch_orientation = message[mxtdata->t100_aux_vect];
                 }
 
                 break;
 
             case MXT_T100_TOUCH_TYPE_PASSIVE_STYLUS:
-                tool = MT_TOOL_PEN;
-                distance = MXT_DISTANCE_ACTIVE_TOUCH;
-                hover = false;
-                active = true;
+                touch_tool_type = MT_TOOL_PEN;
+                touch_distance = MXT_TOUCH_DISTANCE_ACTIVE_TOUCH;
+                is_hover = false;
+                is_active = true;
 
                 /*
                  * Passive stylus is reported with size zero so
                  * hardcode.
                  */
-                major = MXT_TOUCH_MAJOR_DEFAULT;
+                touch_contact_major_axis = MXT_TOUCH_MAJOR_DEFAULT;
 
                 if (mxtdata->t100_aux_ampl)
                 {
-                    pressure = message[mxtdata->t100_aux_ampl];
+                    touch_pressure = message[mxtdata->t100_aux_ampl];
                 }
 
                 break;
@@ -1153,19 +1153,19 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                     break;
                 }
 
-                tool = MT_TOOL_PEN;
-                distance = MXT_DISTANCE_ACTIVE_TOUCH;
-                active = true;
-                major = MXT_TOUCH_MAJOR_DEFAULT;
+                touch_tool_type = MT_TOOL_PEN;
+                touch_distance = MXT_TOUCH_DISTANCE_ACTIVE_TOUCH;
+                is_active = true;
+                touch_contact_major_axis = MXT_TOUCH_MAJOR_DEFAULT;
 
                 if (!(message[6] & MXT_T107_STYLUS_TIPSWITCH))
                 {
-                    hover = true;
-                    distance = MXT_DISTANCE_HOVERING;
+                    is_hover = true;
+                    touch_distance = MXT_TOUCH_DISTANCE_HOVERING;
                 }
                 else if (mxtdata->stylus_aux_pressure)
                 {
-                    pressure = message[mxtdata->stylus_aux_pressure];
+                    touch_pressure = message[mxtdata->stylus_aux_pressure];
                 }
 
                 break;
@@ -1179,7 +1179,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 break;
 
             default:
-                dev_dbg(dev, "T100 Unexpected touch_type %d\n", touch_type);
+                dev_dbg(dev, "T100 Unexpected touch_mxt_type %d\n", touch_mxt_type);
                 return;
         }
     }
@@ -1188,33 +1188,33 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
      * Values reported should be non-zero if tool is touching the
      * device
      */
-    if (!pressure && !hover)
+    if (0 == touch_pressure && !is_hover)
     {
-        pressure = MXT_PRESSURE_DEFAULT;
+        touch_pressure = MXT_TOUCH_PRESSURE_DEFAULT;
     }
 
-    input_mt_slot(inputdev, touch_id);
+    // https://www.kernel.org/doc/Documentation/input/multi-touch-protocol.txt
+    input_mt_slot(inputdev, touch_id_slot);
 
-    if (active)
+    if (is_active)
     {
         dev_dbg(dev,
-                "[%u] %s (%u, %u) m:%02X p:%02X v:%02X\n",
-                touch_id,
-                get_t100_touch_type_str(touch_type),
-                x, y, major, pressure, orientation);
+                "[%u] %s (%u, %u) a:%02X p:%02X o:%02X\n",
+                touch_id_slot,
+                get_t100_touch_type_str(touch_mxt_type),
+                x, y, touch_contact_major_axis, touch_pressure, touch_orientation);
 
-        input_mt_report_slot_state(inputdev, tool, true);
+        input_mt_report_slot_state(inputdev, touch_tool_type, true);
         input_report_abs(inputdev, ABS_MT_POSITION_X, x);
         input_report_abs(inputdev, ABS_MT_POSITION_Y, y);
-        input_report_abs(inputdev, ABS_MT_TOUCH_MAJOR, major);
-        input_report_abs(inputdev, ABS_MT_PRESSURE, pressure);
-        input_report_abs(inputdev, ABS_MT_DISTANCE, distance);
-        input_report_abs(inputdev, ABS_MT_ORIENTATION, orientation);
-
+        input_report_abs(inputdev, ABS_MT_TOUCH_MAJOR, touch_contact_major_axis);
+        input_report_abs(inputdev, ABS_MT_PRESSURE, touch_pressure);
+        input_report_abs(inputdev, ABS_MT_DISTANCE, touch_distance);
+        input_report_abs(inputdev, ABS_MT_ORIENTATION, touch_orientation);
     }
     else
     {
-        dev_dbg(dev, "[%u] release\n", touch_id);
+        dev_dbg(dev, "[%u] release\n", touch_id_slot);
 
         /* close out slot */
         input_mt_report_slot_state(inputdev, 0, false);
@@ -2776,8 +2776,8 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
         input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE,
                              0, MT_TOOL_MAX, 0, 0);
         input_set_abs_params(inputdev, ABS_MT_DISTANCE,
-                             MXT_DISTANCE_ACTIVE_TOUCH,
-                             MXT_DISTANCE_HOVERING,
+                             MXT_TOUCH_DISTANCE_ACTIVE_TOUCH,
+                             MXT_TOUCH_DISTANCE_HOVERING,
                              0, 0);
     }
 
