@@ -303,9 +303,9 @@ struct mxt_data
     bool in_bootloader;
     bool force_update_fw;
     u16 mem_size;
-    u8 t100_aux_ampl;
-    u8 t100_aux_area;
-    u8 t100_aux_vect;
+    u8 t100_aux_ampl_idx;
+    u8 t100_aux_area_idx;
+    u8 t100_aux_vect_idx;
     struct bin_attribute mem_access_attr;
     bool debug_enabled;
     bool debug_v2_enabled;
@@ -325,8 +325,8 @@ struct mxt_data
     u8 multitouch;
     struct t7_config t7_cfg;
     unsigned long t15_keystatus;
-    u8 stylus_aux_pressure;
-    u8 stylus_aux_peak;
+    u8 t100_stylus_aux_pressure_idx;
+    u8 t100_stylus_aux_peak_idx;
     bool use_retrigen_workaround;
     u8 double_tap_enable;
     struct regulator *reg_vdd;
@@ -1110,19 +1110,19 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                 is_hover = false;
                 is_active = true;
 
-                if (mxtdata->t100_aux_area)
+                if (mxtdata->t100_aux_area_idx)
                 {
-                    touch_contact_major_axis = message[mxtdata->t100_aux_area];
+                    touch_contact_major_axis = message[mxtdata->t100_aux_area_idx];
                 }
 
-                if (mxtdata->t100_aux_ampl)
+                if (mxtdata->t100_aux_ampl_idx)
                 {
-                    touch_pressure = message[mxtdata->t100_aux_ampl];
+                    touch_pressure = message[mxtdata->t100_aux_ampl_idx];
                 }
 
-                if (mxtdata->t100_aux_vect)
+                if (mxtdata->t100_aux_vect_idx)
                 {
-                    touch_orientation = message[mxtdata->t100_aux_vect];
+                    touch_orientation = message[mxtdata->t100_aux_vect_idx];
                 }
 
                 break;
@@ -1139,9 +1139,9 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                  */
                 touch_contact_major_axis = MXT_TOUCH_MAJOR_DEFAULT;
 
-                if (mxtdata->t100_aux_ampl)
+                if (mxtdata->t100_aux_ampl_idx)
                 {
-                    touch_pressure = message[mxtdata->t100_aux_ampl];
+                    touch_pressure = message[mxtdata->t100_aux_ampl_idx];
                 }
 
                 break;
@@ -1167,9 +1167,9 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
                     is_hover = true;
                     touch_distance = MXT_TOUCH_DISTANCE_HOVERING;
                 }
-                else if (mxtdata->stylus_aux_pressure)
+                else if (mxtdata->t100_stylus_aux_pressure_idx)
                 {
-                    touch_pressure = message[mxtdata->stylus_aux_pressure];
+                    touch_pressure = message[mxtdata->t100_stylus_aux_pressure_idx];
                 }
 
                 break;
@@ -2507,14 +2507,13 @@ fail:
     return ret_val;
 }
 
-static int mxt_set_up_active_stylus(struct input_dev *inputdev,
-                                    struct mxt_data *mxtdata)
+static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, struct mxt_data *mxtdata)
 {
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
     struct mxt_object *object;
     u8 styaux;
-    int aux;
+    int t100_msg_aux_byte_idx;
     u8 ctrl;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
@@ -2546,16 +2545,16 @@ static int mxt_set_up_active_stylus(struct input_dev *inputdev,
     }
 
     /* map aux bits */
-    aux = 7;
+    t100_msg_aux_byte_idx = 7;
 
     if (styaux & MXT_T107_STYLUS_STYAUX_PRESSURE)
     {
-        mxtdata->stylus_aux_pressure = aux++;
+        mxtdata->t100_stylus_aux_pressure_idx = t100_msg_aux_byte_idx++;
     }
 
     if (styaux & MXT_T107_STYLUS_STYAUX_PEAK)
     {
-        mxtdata->stylus_aux_peak = aux++;
+        mxtdata->t100_stylus_aux_peak_idx = t100_msg_aux_byte_idx++;
     }
 
     input_set_capability(inputdev, EV_KEY, BTN_STYLUS);
@@ -2564,7 +2563,7 @@ static int mxt_set_up_active_stylus(struct input_dev *inputdev,
 
     dev_dbg(&i2cclient->dev,
             "T107 active stylus, aux map pressure:%u peak:%u\n",
-            mxtdata->stylus_aux_pressure, mxtdata->stylus_aux_peak);
+            mxtdata->t100_stylus_aux_pressure_idx, mxtdata->t100_stylus_aux_peak_idx);
 
     return 0;
 }
@@ -2576,7 +2575,7 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
     struct mxt_object *object;
     u8 range_x[2], range_y[2];
     u8 cfg1_byte, tchaux_byte;
-    u8 msg_aux_byte_idx;
+    u8 t100_msg_aux_byte_idx;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
@@ -2627,26 +2626,26 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
         return ret_val;
     }
 
-    msg_aux_byte_idx = 6;
+    t100_msg_aux_byte_idx = 6;
 
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_VECT_BIT)
     {
-        mxtdata->t100_aux_vect = msg_aux_byte_idx++;
+        mxtdata->t100_aux_vect_idx = t100_msg_aux_byte_idx++;
     }
 
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_AMPL_BIT)
     {
-        mxtdata->t100_aux_ampl = msg_aux_byte_idx++;
+        mxtdata->t100_aux_ampl_idx = t100_msg_aux_byte_idx++;
     }
 
     if (tchaux_byte & MXT_T100_CFG_TCHAUX_AREA_BIT)
     {
-        mxtdata->t100_aux_area = msg_aux_byte_idx++;
+        mxtdata->t100_aux_area_idx = t100_msg_aux_byte_idx++;
     }
 
     dev_dbg(&i2cclient->dev,
             "T100 aux - vect:%u ampl:%u area:%u\n",
-            mxtdata->t100_aux_vect, mxtdata->t100_aux_ampl, mxtdata->t100_aux_area);
+            mxtdata->t100_aux_vect_idx, mxtdata->t100_aux_ampl_idx, mxtdata->t100_aux_area_idx);
 
     return 0;
 }
@@ -2752,9 +2751,8 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     /* For single touch */
     input_set_abs_params(inputdev, ABS_X, 0, mxtdata->max_x, 0, 0);
     input_set_abs_params(inputdev, ABS_Y, 0, mxtdata->max_y, 0, 0);
-
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-        mxtdata->t100_aux_ampl)
+        mxtdata->t100_aux_ampl_idx)
     {
         input_set_abs_params(inputdev, ABS_PRESSURE, 0, 255, 0, 0);
     }
@@ -2780,55 +2778,39 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100)
     {
-        input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE,
-                             0, MT_TOOL_MAX, 0, 0);
-        input_set_abs_params(inputdev, ABS_MT_DISTANCE,
-                             MXT_TOUCH_DISTANCE_ACTIVE_TOUCH,
-                             MXT_TOUCH_DISTANCE_HOVERING,
-                             0, 0);
+        input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
+        input_set_abs_params(inputdev, ABS_MT_DISTANCE, MXT_TOUCH_DISTANCE_ACTIVE_TOUCH, MXT_TOUCH_DISTANCE_HOVERING, 0, 0);
     }
 
-    input_set_abs_params(inputdev, ABS_MT_POSITION_X,
-                         0, mxtdata->max_x, 0, 0);
-    input_set_abs_params(inputdev, ABS_MT_POSITION_Y,
-                         0, mxtdata->max_y, 0, 0);
+    input_set_abs_params(inputdev, ABS_MT_POSITION_X, 0, mxtdata->max_x, 0, 0);
+    input_set_abs_params(inputdev, ABS_MT_POSITION_Y, 0, mxtdata->max_y, 0, 0);
 
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-        mxtdata->t100_aux_area)
+        mxtdata->t100_aux_area_idx)
     {
-        input_set_abs_params(inputdev, ABS_MT_TOUCH_MAJOR,
-                             0, MXT_MAX_AREA, 0, 0);
+        input_set_abs_params(inputdev, ABS_MT_TOUCH_MAJOR, 0, MXT_MAX_AREA, 0, 0);
     }
 
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-        (mxtdata->t100_aux_ampl || mxtdata->stylus_aux_pressure))
+        (mxtdata->t100_aux_ampl_idx || mxtdata->t100_stylus_aux_pressure_idx))
     {
-        input_set_abs_params(inputdev, ABS_MT_PRESSURE,
-                             0, 255, 0, 0);
+        input_set_abs_params(inputdev, ABS_MT_PRESSURE, 0, 255, 0, 0);
     }
 
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-            mxtdata->t100_aux_vect)
+        mxtdata->t100_aux_vect_idx)
     {
-        input_set_abs_params(inputdev, ABS_MT_ORIENTATION,
-                             0, 255, 0, 0);
-    }
-
-    if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-        mxtdata->t100_aux_vect)
-    {
-        input_set_abs_params(inputdev, ABS_MT_ORIENTATION,
-                             0, 255, 0, 0);
+        input_set_abs_params(inputdev, ABS_MT_ORIENTATION, 0, 255, 0, 0);
     }
 
     /* For T107 Active Stylus */
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-            mxtdata->T107_address)
+        mxtdata->T107_address)
     {
-        ret_val = mxt_set_up_active_stylus(inputdev, mxtdata);
+        ret_val = mxt_input_device_set_up_active_stylus(inputdev, mxtdata);
         if (ret_val)
         {
-            dev_warn(dev, "Failed to read T107 config\n");
+            dev_err(dev, "Failed to read T107 config\n");
         }
     }
 
