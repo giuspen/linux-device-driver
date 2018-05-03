@@ -1,9 +1,10 @@
 /*
- * Atmel maXTouch Touchscreen driver
+ * Solomon Systech maXTouch Touchscreen driver
  *
  * Copyright (C) 2010 Samsung Electronics Co.Ltd
  * Copyright (C) 2011-2014 Atmel Corporation
  * Copyright (C) 2012 Google, Inc.
+ * Copyright (C) 2018 Solomon Systech Ltd.
  *
  * Author: Joonyoung Shim <jy0922.shim@samsung.com>
  *
@@ -144,22 +145,25 @@ struct t7_config
 #define MXT_T6_CALIBRATE_VALUE 0x01
 #define MXT_T6_BACKUP_VALUE    0x55
 
-/* T100 Multiple Touch Touchscreen */
-#define MXT_T100_CTRL_ENABLE    (1 << 0)
-#define MXT_T100_CTRL_RPTEN     (1 << 1)
-#define MXT_T100_CTRL_DISSCRMSG (1 << 2)
-#define MXT_T100_CTRL_SCANEN    (1 << 7)
+/* T100 Multiple Touch Touchscreen CFG*/
+#define MXT_T100_CFG_CTRL_OFFSET        0
+#define MXT_T100_CFG_CTRL_ENABLE_BIT    (1 << 0)
+#define MXT_T100_CFG_CTRL_RPTEN_BIT     (1 << 1)
+#define MXT_T100_CFG_CTRL_DISSCRMSG_BIT (1 << 2)
+#define MXT_T100_CFG_CTRL_SCANEN_BIT    (1 << 7)
 
-#define MXT_T100_CTRL        0
-#define MXT_T100_CFG1        1
-#define MXT_T100_TCHAUX      3
-#define MXT_T100_XRANGE     13
-#define MXT_T100_YRANGE     24
+#define MXT_T100_CFG_CFG1_OFFSET        1
+#define MXT_T100_CFG_CFG1_SWITCHXY_BIT  (1 << 5)
 
-#define MXT_T100_TCHAUX_VECT    (1 << 0)
-#define MXT_T100_TCHAUX_AMPL    (1 << 1)
-#define MXT_T100_TCHAUX_AREA    (1 << 2)
-#define MXT_T100_CFG_SWITCHXY   (1 << 5)
+#define MXT_T100_CFG_TCHAUX_OFFSET      3
+#define MXT_T100_CFG_TCHAUX_VECT_BIT    (1 << 0)
+#define MXT_T100_CFG_TCHAUX_AMPL_BIT    (1 << 1)
+#define MXT_T100_CFG_TCHAUX_AREA_BIT    (1 << 2)
+
+#define MXT_T100_CFG_XRANGE_OFFSET     13
+#define MXT_T100_CFG_YRANGE_OFFSET     24
+
+/* T100 Multiple Touch Touchscreen MSG*/
 #define MXT_T100_MSG_TCHSTATUS_DETECT_BIT     (1 << 7)
 #define MXT_T100_MSG_TCHSTATUS_TYPE_MASK          0x70
 #define MXT_T100_MSG_TCHSTATUS_TYPE_OFFSET           4
@@ -1069,7 +1073,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     int touch_tool_type = 0;
     u8 touch_contact_major_axis = 0;
     u8 touch_pressure = 0;
-    u8 touch_orientation = 0;
+    u8 touch_orientation = 0; // 0 -> along Y, 1 -> along X
     bool is_active = false;
     bool is_hover = false;
 
@@ -1199,7 +1203,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     if (is_active)
     {
         dev_dbg(dev,
-                "[%u] %s (%u, %u) a:%02X p:%02X o:%02X\n",
+                "[%u] %s (%u, %u) a:%d p:%d o:%d\n",
                 touch_id_slot,
                 get_t100_touch_type_str(touch_mxt_type),
                 x, y, touch_contact_major_axis, touch_pressure, touch_orientation);
@@ -2254,7 +2258,9 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
                 mxtdata->T100_address = object->start_address;
                 mxtdata->T100_reportid_min = min_id;
                 mxtdata->T100_reportid_max = max_id;
-                /* first two report IDs reserved */
+                // First Report ID is Screen Status Messages
+                // Second Report ID is Reserved
+                // Subsequent Report IDs are Touch Status Messages
                 mxtdata->num_touchids = object->num_report_ids - 2;
                 break;
             case MXT_PROCI_ACTIVESTYLUS_T107:
@@ -2568,9 +2574,9 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
     struct mxt_object *object;
-    u16 range_x, range_y;
-    u8 cfg, tchaux;
-    u8 aux;
+    u8 range_x[2], range_y[2];
+    u8 cfg1_byte, tchaux_byte;
+    u8 msg_aux_byte_idx;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
@@ -2582,91 +2588,92 @@ static int mxt_read_t100_config(struct mxt_data *mxtdata)
 
     /* read touchscreen dimensions */
     ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T100_XRANGE,
-                             sizeof(range_x), &range_x);
+                             object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
+                             2, range_x);
     if (ret_val)
     {
         return ret_val;
     }
 
-    mxtdata->max_x = get_unaligned_le16(&range_x);
+    mxtdata->max_x = range_x[0] | range_x[1] << 8; // little endian 16
 
     ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T100_YRANGE,
-                             sizeof(range_y), &range_y);
+                             object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
+                             2, range_y);
     if (ret_val)
     {
         return ret_val;
     }
 
-    mxtdata->max_y = get_unaligned_le16(&range_y);
+    mxtdata->max_y = range_y[0] | range_y[1] << 8; // little endian 16
 
     /* read orientation config */
     ret_val =  __mxt_read_reg(i2cclient,
-                              object->start_address + MXT_T100_CFG1,
-                              1, &cfg);
+                              object->start_address + MXT_T100_CFG_CFG1_OFFSET,
+                              1, &cfg1_byte);
     if (ret_val)
     {
         return ret_val;
     }
 
-    mxtdata->xy_switch = cfg & MXT_T100_CFG_SWITCHXY;
+    mxtdata->xy_switch = cfg1_byte & MXT_T100_CFG_CFG1_SWITCHXY_BIT;
 
     /* allocate aux bytes */
     ret_val =  __mxt_read_reg(i2cclient,
-                              object->start_address + MXT_T100_TCHAUX,
-                              1, &tchaux);
+                              object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
+                              1, &tchaux_byte);
     if (ret_val)
     {
         return ret_val;
     }
 
-    aux = 6;
+    msg_aux_byte_idx = 6;
 
-    if (tchaux & MXT_T100_TCHAUX_VECT)
+    if (tchaux_byte & MXT_T100_CFG_TCHAUX_VECT_BIT)
     {
-        mxtdata->t100_aux_vect = aux++;
+        mxtdata->t100_aux_vect = msg_aux_byte_idx++;
     }
 
-    if (tchaux & MXT_T100_TCHAUX_AMPL)
+    if (tchaux_byte & MXT_T100_CFG_TCHAUX_AMPL_BIT)
     {
-        mxtdata->t100_aux_ampl = aux++;
+        mxtdata->t100_aux_ampl = msg_aux_byte_idx++;
     }
 
-    if (tchaux & MXT_T100_TCHAUX_AREA)
+    if (tchaux_byte & MXT_T100_CFG_TCHAUX_AREA_BIT)
     {
-        mxtdata->t100_aux_area = aux++;
+        mxtdata->t100_aux_area = msg_aux_byte_idx++;
     }
 
     dev_dbg(&i2cclient->dev,
-            "T100 aux mappings vect:%u ampl:%u area:%u\n",
+            "T100 aux - vect:%u ampl:%u area:%u\n",
             mxtdata->t100_aux_vect, mxtdata->t100_aux_ampl, mxtdata->t100_aux_area);
 
     return 0;
 }
 
-static void mxt_set_up_as_touchpad(struct input_dev *inputdev, struct mxt_data *mxtdata)
+static void mxt_input_device_set_up_as_touchpad(struct input_dev *inputdev, struct mxt_data *mxtdata)
 {
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    inputdev->name = "Atmel maXTouch Touchpad";
+    inputdev->name = "Solomon Systech maXTouch Touchpad";
 
     __set_bit(INPUT_PROP_BUTTONPAD, inputdev->propbit);
 
     input_abs_set_res(inputdev, ABS_X, MXT_PIXELS_PER_MM);
     input_abs_set_res(inputdev, ABS_Y, MXT_PIXELS_PER_MM);
-    input_abs_set_res(inputdev, ABS_MT_POSITION_X,
-                      MXT_PIXELS_PER_MM);
-    input_abs_set_res(inputdev, ABS_MT_POSITION_Y,
-                      MXT_PIXELS_PER_MM);
+    input_abs_set_res(inputdev, ABS_MT_POSITION_X, MXT_PIXELS_PER_MM);
+    input_abs_set_res(inputdev, ABS_MT_POSITION_Y, MXT_PIXELS_PER_MM);
 
     for (i = 0; i < mxtplatform->t19_num_keys; i++)
+    {
         if (mxtplatform->t19_keymap[i] != KEY_RESERVED)
-            input_set_capability(inputdev, EV_KEY,
-                                 mxtplatform->t19_keymap[i]);
+        {
+            input_set_capability(inputdev, EV_KEY, mxtplatform->t19_keymap[i]);
+        }
+    }
 }
 
 static int mxt_input_device_initialize(struct mxt_data *mxtdata)
@@ -2727,7 +2734,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
     else
     {
-        inputdev->name = "Atmel maXTouch Touchscreen";
+        inputdev->name = "Solomon Systech maXTouch Touchscreen";
     }
 
     inputdev->phys = mxtdata->phys;
@@ -2755,7 +2762,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     /* If device has buttons we assume it is a touchpad */
     if (mxtplatform->t19_num_keys)
     {
-        mxt_set_up_as_touchpad(inputdev, mxtdata);
+        mxt_input_device_set_up_as_touchpad(inputdev, mxtdata);
         mt_flags |= INPUT_MT_POINTER;
     }
     else
@@ -3914,7 +3921,7 @@ static int mxt_start(struct mxt_data *mxtdata)
             {
                 return ret_val;
             }
-            mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CTRL_ENABLE | MXT_T100_CTRL_RPTEN | MXT_T100_CTRL_DISSCRMSG | MXT_T100_CTRL_SCANEN));
+            mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CFG_CTRL_ENABLE_BIT | MXT_T100_CFG_CTRL_RPTEN_BIT | MXT_T100_CFG_CTRL_DISSCRMSG_BIT | MXT_T100_CFG_CTRL_SCANEN_BIT));
 
             /* Recalibrate since chip has been in deep sleep */
             ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_CALIBRATE, MXT_T6_CALIBRATE_VALUE, false/*wait*/);
@@ -3987,7 +3994,7 @@ static int mxt_stop(struct mxt_data *mxtdata)
                     return ret_val;
                 }
             }
-            mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CTRL_ENABLE | MXT_T100_CTRL_DISSCRMSG | MXT_T100_CTRL_SCANEN));
+            mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CFG_CTRL_ENABLE_BIT | MXT_T100_CFG_CTRL_DISSCRMSG_BIT | MXT_T100_CFG_CTRL_SCANEN_BIT));
             mxt_reset_slots(mxtdata);
             if(mxtdata->double_tap_enable == 1)
             {
@@ -4573,5 +4580,5 @@ module_i2c_driver(mxt_driver);
 
 /* Module information */
 MODULE_AUTHOR("Joonyoung Shim <jy0922.shim@samsung.com>");
-MODULE_DESCRIPTION("Atmel maXTouch Touchscreen driver");
+MODULE_DESCRIPTION("Solomon Systech maXTouch Touchscreen driver");
 MODULE_LICENSE("GPL");
