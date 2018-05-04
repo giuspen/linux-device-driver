@@ -70,7 +70,7 @@ struct mxt_platform_data
 #define MXT_GEN_MESSAGEPROCESSOR_T5                5
 #define MXT_GEN_COMMANDPROCESSOR_T6                6
 #define MXT_GEN_POWERCONFIG_T7                     7
-#define GEN_ACQUISITIONCONFIG_T8                   8
+#define MXT_GEN_ACQUISITIONCONFIG_T8               8
 #define MXT_TOUCH_KEYARRAY_T15                    15
 #define MXT_SPT_COMMSCONFIG_T18                   18
 #define MXT_SPT_GPIOPWM_T19                       19
@@ -92,8 +92,8 @@ struct mxt_platform_data
 #define MXT_TOUCH_PROXKEY_T52                     52
 #define MXT_GEN_DATASOURCE_T53                    53
 #define MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71 71
-#define MXT_PROCI_SYMBOLGESTUREPROCESSOR          92
-#define MXT_PROCI_TOUCHSEQUENCELOGGER             93
+#define MXT_PROCI_SYMBOLGESTUREPROCESSOR_T92      92
+#define MXT_PROCI_TOUCHSEQUENCELOGGER_T93         93
 #define MXT_TOUCH_MULTITOUCHSCREEN_T100          100
 #define MXT_PROCI_ACTIVESTYLUS_T107              107
 
@@ -338,25 +338,30 @@ struct mxt_data
     char *cfg_name;
     struct mxt_flash *mxtflash;
 
-    /* Cached parameters from object table */
+    // objects that we want to read/write to
     u16 T5_cfg_address;
-    u8 T5_msg_size;
-    u8 T6_msg_reportid;
     u16 T6_cfg_address;
     u16 T7_cfg_address;
+    u16 T18_cfg_address;
+    u16 T44_cfg_address;
+    u16 T71_cfg_address;
+    u16 T93_cfg_address;
+    u16 T100_cfg_address;
+    u16 T107_cfg_address;
+
+    // size of the largest possible messages
+    u8 T5_msg_size;
+
+    // objects that support sendine messages
+    // whose content we want to parse
+    u8 T6_msg_reportid;
     u8 T15_msg_reportid_min;
     u8 T15_msg_reportid_max;
-    u16 T18_cfg_address;
-    u16 T44_address;
-    u16 T71_address;
-    u16 T92_address;
-    u8 T92_reportid;
-    u16 T93_address;
-    u8 T93_reportid;
-    u16 T100_address;
-    u8 T100_reportid_min;
-    u8 T100_reportid_max;
-    u16 T107_address;
+    u8 T19_msg_reportid;
+    u8 T92_msg_reportid;
+    u8 T93_msg_reportid;
+    u8 T100_msg_reportid_min;
+    u8 T100_msg_reportid_max;
 
     /* for reset handling */
     struct completion reset_completion;
@@ -1080,7 +1085,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     // First Report ID is Screen Status Messages
     // Second Report ID is Reserved
     // Subsequent Report IDs are Touch Status Messages
-    touch_id_slot = message[0] - mxtdata->T100_reportid_min - 2;
+    touch_id_slot = message[0] - mxtdata->T100_msg_reportid_min - 2;
     if (touch_id_slot < 0)
     {
         return;
@@ -1228,7 +1233,12 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report_id)
 {
     int ret_val = 0;
-    if (report_id == mxtdata->T6_msg_reportid)
+    if (report_id >= mxtdata->T100_msg_reportid_min &&
+        report_id <= mxtdata->T100_msg_reportid_max)
+    {
+        ret_val = 100;
+    }
+    else if (report_id == mxtdata->T6_msg_reportid)
     {
         ret_val = 6;
     }
@@ -1237,18 +1247,17 @@ static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report
     {
         ret_val = 15;
     }
-    else if (report_id == mxtdata->T92_reportid)
+    else if (report_id == mxtdata->T19_msg_reportid)
+    {
+        ret_val = 19;
+    }
+    else if (report_id == mxtdata->T92_msg_reportid)
     {
         ret_val = 92;
     }
-    else if (report_id == mxtdata->T93_reportid)
+    else if (report_id == mxtdata->T93_msg_reportid)
     {
         ret_val = 93;
-    }
-    else if (report_id >= mxtdata->T100_reportid_min &&
-             report_id <= mxtdata->T100_reportid_max)
-    {
-        ret_val = 100;
     }
     return ret_val;
 }
@@ -1318,7 +1327,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         }
         else
         {
-            dev_err(&mxtdata->i2cclient->dev, "T%d unhandled", object_number);
+            dev_warn(&mxtdata->i2cclient->dev, "T%d unhandled", object_number);
             dump = true;
         }
     }
@@ -1388,7 +1397,7 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
 
     /* Read T44 and T5 together */
     ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                             mxtdata->T44_address,
+                             mxtdata->T44_cfg_address,
                              1 + mxtdata->T5_msg_size,
                              mxtdata->msg_buf);
     if (ret_val)
@@ -1542,7 +1551,7 @@ static irqreturn_t mxt_interrupt(int irq, void *dev_id)
         return IRQ_HANDLED;
     }
 
-    if (mxtdata->T44_address)
+    if (mxtdata->T44_cfg_address)
     {
         return mxt_process_messages_t44(mxtdata);
     }
@@ -2008,9 +2017,9 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
     }
 
     /* Calculate crc of the received configs (not the raw config file) */
-    if (mxtdata->T71_address)
+    if (mxtdata->T71_cfg_address)
     {
-        crc_start = mxtdata->T71_address;
+        crc_start = mxtdata->T71_cfg_address;
     }
     else if (mxtdata->T7_cfg_address)
     {
@@ -2137,21 +2146,28 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->raw_info_block = NULL;
     kfree(mxtdata->msg_buf);
     mxtdata->msg_buf = NULL;
+
     mxtdata->T5_cfg_address = 0;
-    mxtdata->T5_msg_size = 0;
-    mxtdata->T6_msg_reportid = 0;
+    mxtdata->T6_cfg_address = 0;
     mxtdata->T7_cfg_address = 0;
-    mxtdata->T71_address = 0;
+    mxtdata->T18_cfg_address = 0;
+    mxtdata->T44_cfg_address = 0;
+    mxtdata->T71_cfg_address = 0;
+    mxtdata->T93_cfg_address = 0;
+    mxtdata->T100_cfg_address = 0;
+    mxtdata->T107_cfg_address = 0;
+
+    mxtdata->T5_msg_size = 0;
+
+    mxtdata->T6_msg_reportid = 0;
     mxtdata->T15_msg_reportid_min = 0;
     mxtdata->T15_msg_reportid_max = 0;
-    mxtdata->T18_cfg_address = 0;
-    mxtdata->T44_address = 0;
-    mxtdata->T92_reportid = 0;
-    mxtdata->T92_address = 0;
-    mxtdata->T93_reportid = 0;
-    mxtdata->T93_address = 0;
-    mxtdata->T100_reportid_min = 0;
-    mxtdata->T100_reportid_max = 0;
+    mxtdata->T19_msg_reportid = 0;
+    mxtdata->T92_msg_reportid = 0;
+    mxtdata->T93_msg_reportid = 0;
+    mxtdata->T100_msg_reportid_min = 0;
+    mxtdata->T100_msg_reportid_max = 0;
+
     mxtdata->max_reportid = 0;
 }
 
@@ -2195,8 +2211,9 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
         switch (object->type)
         {
             case MXT_GEN_MESSAGEPROCESSOR_T5:
+                mxtdata->T5_cfg_address = object->start_address;
                 if (mxtdata->mxtinfo->family_id == 0x80 &&
-                        mxtdata->mxtinfo->version < 0x20)
+                    mxtdata->mxtinfo->version < 0x20)
                 {
                     /*
                      * On mXT224 firmware versions prior to V2.0
@@ -2210,48 +2227,49 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
                     /* CRC not enabled, so skip last byte */
                     mxtdata->T5_msg_size = mxt_obj_size(object) - 1;
                 }
-                mxtdata->T5_cfg_address = object->start_address;
                 break;
             case MXT_GEN_COMMANDPROCESSOR_T6:
-                mxtdata->T6_msg_reportid = min_id;
                 mxtdata->T6_cfg_address = object->start_address;
+                mxtdata->T6_msg_reportid = min_id;
                 break;
             case MXT_GEN_POWERCONFIG_T7:
                 mxtdata->T7_cfg_address = object->start_address;
                 break;
+            case MXT_SPT_COMMSCONFIG_T18:
+                mxtdata->T18_cfg_address = object->start_address;
+                break;
+            case MXT_SPT_GPIOPWM_T19:
+                mxtdata->T19_msg_reportid = object->start_address;
+                break;
             case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
-                mxtdata->T71_address = object->start_address;
+                mxtdata->T71_cfg_address = object->start_address;
                 break;
             case MXT_TOUCH_KEYARRAY_T15:
                 mxtdata->T15_msg_reportid_min = min_id;
                 mxtdata->T15_msg_reportid_max = max_id;
                 break;
-            case MXT_SPT_COMMSCONFIG_T18:
-                mxtdata->T18_cfg_address = object->start_address;
-                break;
             case MXT_SPT_MESSAGECOUNT_T44:
-                mxtdata->T44_address = object->start_address;
+                mxtdata->T44_cfg_address = object->start_address;
                 break;
-            case MXT_PROCI_SYMBOLGESTUREPROCESSOR:
-                mxtdata->T92_reportid = min_id;
-                mxtdata->T92_address = object->start_address;
+            case MXT_PROCI_SYMBOLGESTUREPROCESSOR_T92:
+                mxtdata->T92_msg_reportid = min_id;
                 break;
-            case MXT_PROCI_TOUCHSEQUENCELOGGER:
-                mxtdata->T93_reportid = min_id;
-                mxtdata->T93_address = object->start_address;
+            case MXT_PROCI_TOUCHSEQUENCELOGGER_T93:
+                mxtdata->T93_cfg_address = object->start_address;
+                mxtdata->T93_msg_reportid = min_id;
                 break;
             case MXT_TOUCH_MULTITOUCHSCREEN_T100:
                 mxtdata->multitouch = MXT_TOUCH_MULTITOUCHSCREEN_T100;
-                mxtdata->T100_address = object->start_address;
-                mxtdata->T100_reportid_min = min_id;
-                mxtdata->T100_reportid_max = max_id;
+                mxtdata->T100_cfg_address = object->start_address;
+                mxtdata->T100_msg_reportid_min = min_id;
+                mxtdata->T100_msg_reportid_max = max_id;
                 // First Report ID is Screen Status Messages
                 // Second Report ID is Reserved
                 // Subsequent Report IDs are Touch Status Messages
                 mxtdata->num_touchids = object->num_report_ids - 2;
                 break;
             case MXT_PROCI_ACTIVESTYLUS_T107:
-                mxtdata->T107_address = object->start_address;
+                mxtdata->T107_cfg_address = object->start_address;
                 break;
         }
 
@@ -2266,7 +2284,7 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
     mxtdata->max_reportid = reportid;
 
     /* If T44 exists, T5 position has to be directly after */
-    if (mxtdata->T44_address && (mxtdata->T5_cfg_address != mxtdata->T44_address + 1))
+    if (mxtdata->T44_cfg_address && (mxtdata->T5_cfg_address != mxtdata->T44_cfg_address + 1))
     {
         dev_err(&i2cclient->dev, "Invalid T44 position\n");
         return -EINVAL;
@@ -2788,7 +2806,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     /* For T107 Active Stylus */
     if (mxtdata->multitouch == MXT_TOUCH_MULTITOUCHSCREEN_T100 &&
-        mxtdata->T107_address)
+        mxtdata->T107_cfg_address)
     {
         ret_val = mxt_input_device_set_up_active_stylus(inputdev, mxtdata);
         if (ret_val)
@@ -2809,7 +2827,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
 
     /* For double tap */
-    if (mxtdata->T93_address)
+    if (mxtdata->T93_msg_reportid)
     {
         input_set_capability(inputdev, EV_KEY, KEY_WAKEUP);
     }
@@ -2847,7 +2865,7 @@ static int mxt_t93_configuration(struct mxt_data *mxtdata, u16 cmd_offset, u8 st
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    reg = mxtdata->T93_address + cmd_offset;
+    reg = mxtdata->T93_cfg_address + cmd_offset;
     ret_val = __mxt_read_reg(mxtdata->i2cclient, reg, 1, &command_register);
     if (ret_val)
     {
@@ -2880,7 +2898,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    reg = mxtdata->T100_address + cmd_offset;
+    reg = mxtdata->T100_cfg_address + cmd_offset;
     command_register = type;
 
     ret_val = mxt_write_reg(mxtdata->i2cclient, reg, command_register);
@@ -3199,7 +3217,7 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
         {
             case MXT_GEN_COMMANDPROCESSOR_T6:
             case MXT_GEN_POWERCONFIG_T7:
-            case GEN_ACQUISITIONCONFIG_T8:
+            case MXT_GEN_ACQUISITIONCONFIG_T8:
             case MXT_TOUCH_KEYARRAY_T15:
             case MXT_SPT_COMMSCONFIG_T18:
             case MXT_SPT_GPIOPWM_T19:
@@ -3894,7 +3912,7 @@ static int mxt_start(struct mxt_data *mxtdata)
             {
                 return ret_val;
             }
-            if (mxtdata->T93_address)
+            if (mxtdata->T93_cfg_address)
             {
                 mxt_t93_configuration(mxtdata, 0, MXT_T93_DISABLE);
             }
