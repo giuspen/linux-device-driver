@@ -48,7 +48,7 @@ enum mxt_suspend_mode
 #define GPIO_RESET_NO_HIGH  1
 #define GPIO_RESET_YES_LOW  0
 
-/* The platform data for the Atmel maXTouch touchscreen driver */
+/* Platform Data (e.g. populated from Device Tree) */
 struct mxt_platform_data
 {
     u8 t19_num_keys;
@@ -57,26 +57,20 @@ struct mxt_platform_data
     int t15_num_keys;
     const unsigned int *t15_keymap;
     unsigned long gpio_reset;
-    unsigned long gpio_irq;
+    unsigned long gpio_chg_irq;
     const char *cfg_name;
     const char *fw_name;
     const char *input_name;
 };
 
-/* Configuration file */
+/* Configuration file format version expected*/
 #define MXT_CFG_MAGIC       "OBP_RAW V1"
 
-/* Registers */
-#define MXT_OBJECT_START     0x07
-#define MXT_OBJECT_SIZE         6
-#define MXT_INFO_CHECKSUM_SIZE  3
-#define MXT_MAX_BLOCK_WRITE   255
-
 /* Object types */
-#define MXT_GEN_MESSAGE_T5                         5
-#define MXT_GEN_COMMAND_T6                         6
-#define MXT_GEN_POWER_T7                           7
-#define MXT_GEN_ACQUIRE_T8                         8
+#define MXT_GEN_MESSAGEPROCESSOR_T5                5
+#define MXT_GEN_COMMANDPROCESSOR_T6                6
+#define MXT_GEN_POWERCONFIG_T7                     7
+#define GEN_ACQUISITIONCONFIG_T8                   8
 #define MXT_TOUCH_KEYARRAY_T15                    15
 #define MXT_SPT_COMMSCONFIG_T18                   18
 #define MXT_SPT_GPIOPWM_T19                       19
@@ -103,59 +97,59 @@ struct mxt_platform_data
 #define MXT_TOUCH_MULTITOUCHSCREEN_T100          100
 #define MXT_PROCI_ACTIVESTYLUS_T107              107
 
-/* MXT_GEN_MESSAGE_T5 object */
-#define MXT_RPTID_NOMSG     0xff
+/* T5 Message Processor */
+#define MXT_T5_REPORTID_VAL_NOMSG     0xff
 
-/* MXT_GEN_COMMAND_T6 field */
-#define MXT_T6_COMMAND_RESET       0
-#define MXT_T6_COMMAND_BACKUPNV    1
-#define MXT_T6_COMMAND_CALIBRATE   2
-#define MXT_T6_COMMAND_REPORTALL   3
-#define MXT_T6_COMMAND_DIAGNOSTIC  5
+/* T6 Command Processor */
+#define MXT_T6_CFG_RESET_OFFSET       0
+#define MXT_T6_CFG_BACKUPNV_OFFSET    1
+#define MXT_T6_CFG_CALIBRATE_OFFSET   2
+#define MXT_T6_CFG_REPORTALL_OFFSET   3
+#define MXT_T6_CFG_DIAGNOSTIC_OFFSET  5
 
-/* Define for T6 status byte */
-#define MXT_T6_STATUS_RESET     (1 << 7)
-#define MXT_T6_STATUS_OFL       (1 << 6)
-#define MXT_T6_STATUS_SIGERR    (1 << 5)
-#define MXT_T6_STATUS_CAL       (1 << 4)
-#define MXT_T6_STATUS_CFGERR    (1 << 3)
-#define MXT_T6_STATUS_COMSERR   (1 << 2)
+#define MXT_T6_CFG_RESET_VAL_TO_BOOTL    0xa5
+#define MXT_T6_CFG_RESET_VAL_TO_APP      0x01 // any non zero and non 0xa5
+#define MXT_T6_CFG_BACKUPNV_VAL_TO_NVM   0x55
+#define MXT_T6_CFG_CALIBRATE_VAL_EXEC    0x01 // any non zero
+#define MXT_T6_CFG_REPORTALL_VAL_EXEC    0x01 // any non zero
 
-/* MXT_GEN_POWER_T7 field */
-struct t7_config
+#define MXT_T6_MSG_STATUS_RESET_BIT     (1 << 7)
+#define MXT_T6_MSG_STATUS_OFL_BIT       (1 << 6)
+#define MXT_T6_MSG_STATUS_SIGERR_BIT    (1 << 5)
+#define MXT_T6_MSG_STATUS_CAL_BIT       (1 << 4)
+#define MXT_T6_MSG_STATUS_CFGERR_BIT    (1 << 3)
+#define MXT_T6_MSG_STATUS_COMSERR_BIT   (1 << 2)
+
+/* T7 Power Configuration */
+struct t7_powerconfig
 {
     u8 idle;
     u8 active;
 } __packed;
 
-#define MXT_POWER_CFG_RUN       0
-#define MXT_POWER_CFG_DEEPSLEEP 1
-#define MXT_POWER_CFG_POWERSAVE 2
-#define MXT_POWER_CFG_GESTURE   3
+enum t7_powerconfig_type
+{
+    MXT_T7_POWER_CFG_RUN       = 0,
+    MXT_T7_POWER_CFG_DEEPSLEEP = 1,
+    MXT_T7_POWER_CFG_POWERSAVE = 2,
+    MXT_T7_POWER_CFG_GESTURE   = 3,
+};
 
-/* MXT_SPT_COMMSCONFIG_T18 */
-#define MXT_COMMS_CTRL      0
-#define MXT_COMMS_CMD       1
-#define MXT_COMMS_RETRIGEN      (1 << 6)
-
-/* Define for MXT_GEN_COMMAND_T6 */
-#define MXT_T6_BOOT_VALUE      0xa5
-#define MXT_T6_RESET_VALUE     0x01
-#define MXT_T6_REPORTALL_VALUE 0x01
-#define MXT_T6_CALIBRATE_VALUE 0x01
-#define MXT_T6_BACKUP_VALUE    0x55
+/* T18 Comms Configuration */
+#define MXT_T18_CFG_CTRL_OFFSET               0
+#define MXT_T18_CFG_CTRL_RETRIGEN_BIT  (1 << 6)
 
 /* T100 Multiple Touch Touchscreen CFG*/
-#define MXT_T100_CFG_CTRL_OFFSET        0
+#define MXT_T100_CFG_CTRL_OFFSET               0
 #define MXT_T100_CFG_CTRL_ENABLE_BIT    (1 << 0)
 #define MXT_T100_CFG_CTRL_RPTEN_BIT     (1 << 1)
 #define MXT_T100_CFG_CTRL_DISSCRMSG_BIT (1 << 2)
 #define MXT_T100_CFG_CTRL_SCANEN_BIT    (1 << 7)
 
-#define MXT_T100_CFG_CFG1_OFFSET        1
+#define MXT_T100_CFG_CFG1_OFFSET               1
 #define MXT_T100_CFG_CFG1_SWITCHXY_BIT  (1 << 5)
 
-#define MXT_T100_CFG_TCHAUX_OFFSET      3
+#define MXT_T100_CFG_TCHAUX_OFFSET             3
 #define MXT_T100_CFG_TCHAUX_VECT_BIT    (1 << 0)
 #define MXT_T100_CFG_TCHAUX_AMPL_BIT    (1 << 1)
 #define MXT_T100_CFG_TCHAUX_AREA_BIT    (1 << 2)
@@ -187,7 +181,7 @@ enum t100_touch_type
 #define MXT_TOUCH_MAJOR_DEFAULT           1
 #define MXT_TOUCH_PRESSURE_DEFAULT        1
 
-/* Active Stylus */
+/* T107 Active Stylus */
 #define MXT_T107_CFG_STYAUX_OFFSET           37
 #define MXT_T107_CFG_STYAUX_PRS_BIT    (1 << 0)
 #define MXT_T107_CFG_STYAUX_XPEAK_BIT  (1 << 6)
@@ -209,8 +203,8 @@ enum t100_touch_type
 #define MXT_POWERON_DELAY    150 /* msec */
 
 /* Command to unlock bootloader */
-#define MXT_UNLOCK_CMD_BYTE0     0xdc
-#define MXT_UNLOCK_CMD_BYTE1     0xaa
+#define MXT_BOOTL_UNLOCK_CMD_BYTE0     0xdc
+#define MXT_BOOTL_UNLOCK_CMD_BYTE1     0xaa
 
 /* Bootloader mode status bits 7 6 */
 #define MXT_BOOT_STATUS_WAITING_BOOTLOAD_CMD 0xc0
@@ -237,6 +231,8 @@ enum t100_touch_type
 
 #define DEBUG_MSG_MAX      200
 
+#define MXT_MAX_BLOCK_WRITE   255
+
 #define MXT_T93_ENABLE      1
 #define MXT_T93_DISABLE     2
 
@@ -262,6 +258,9 @@ struct mxt_object
     u8 instances_minus_one;
     u8 num_report_ids;
 } __packed;
+
+#define MXT_OBJECT_START     0x07 // after struct mxt_info
+#define MXT_INFO_CHECKSUM_SIZE  3 // after list of struct mxt_object
 
 /* Config update context */
 struct mxt_cfg
@@ -326,7 +325,7 @@ struct mxt_data
     u8 last_message_count;
     u8 num_touchids;
     u8 multitouch;
-    struct t7_config t7_cfg;
+    struct t7_powerconfig t7_powercfg;
     unsigned long t15_keystatus;
     u8 t100_stylus_aux_pressure_idx;
     u8 t100_stylus_aux_xpeak_idx;
@@ -340,19 +339,16 @@ struct mxt_data
     struct mxt_flash *mxtflash;
 
     /* Cached parameters from object table */
-    u16 T5_address;
+    u16 T5_cfg_address;
     u8 T5_msg_size;
-    u8 T6_reportid;
-    u16 T6_address;
-    u16 T7_address;
-    u16 T8_address;
-    u8 T8_msg_size;
-    u16 T71_address;
-    u8 T15_reportid_min;
-    u8 T15_reportid_max;
-    u16 T18_address;
-    u8 T19_reportid;
+    u8 T6_msg_reportid;
+    u16 T6_cfg_address;
+    u16 T7_cfg_address;
+    u8 T15_msg_reportid_min;
+    u8 T15_msg_reportid_max;
+    u16 T18_cfg_address;
     u16 T44_address;
+    u16 T71_address;
     u16 T92_address;
     u8 T92_reportid;
     u16 T93_address;
@@ -893,7 +889,7 @@ static int mxt_send_bootloader_reset_cmd(struct mxt_data *mxtdata)
 
 static int mxt_send_bootloader_unlock_cmd(struct mxt_data *mxtdata)
 {
-    u8 buf[2] = {MXT_UNLOCK_CMD_BYTE0, MXT_UNLOCK_CMD_BYTE1};
+    u8 buf[2] = {MXT_BOOTL_UNLOCK_CMD_BYTE0, MXT_BOOTL_UNLOCK_CMD_BYTE1};
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
@@ -968,7 +964,7 @@ static void mxt_recv_t6_command_processor(struct mxt_data *mxtdata, u8 *msg)
     complete(&mxtdata->crc_completion);
 
     /* Detect reset */
-    if (status & MXT_T6_STATUS_RESET)
+    if (status & MXT_T6_MSG_STATUS_RESET_BIT)
     {
         complete(&mxtdata->reset_completion);
     }
@@ -979,12 +975,12 @@ static void mxt_recv_t6_command_processor(struct mxt_data *mxtdata, u8 *msg)
         dev_info(dev, "T6 Status 0x%02X%s%s%s%s%s%s%s\n",
                  status,
                  status == 0 ? " OK" : "",
-                 status & MXT_T6_STATUS_RESET ? " RESET" : "",
-                 status & MXT_T6_STATUS_OFL ? " OFL" : "",
-                 status & MXT_T6_STATUS_SIGERR ? " SIGERR" : "",
-                 status & MXT_T6_STATUS_CAL ? " CAL" : "",
-                 status & MXT_T6_STATUS_CFGERR ? " CFGERR" : "",
-                 status & MXT_T6_STATUS_COMSERR ? " COMSERR" : "");
+                 status & MXT_T6_MSG_STATUS_RESET_BIT ? " RESET" : "",
+                 status & MXT_T6_MSG_STATUS_OFL_BIT ? " OFL" : "",
+                 status & MXT_T6_MSG_STATUS_SIGERR_BIT ? " SIGERR" : "",
+                 status & MXT_T6_MSG_STATUS_CAL_BIT ? " CAL" : "",
+                 status & MXT_T6_MSG_STATUS_CFGERR_BIT ? " CFGERR" : "",
+                 status & MXT_T6_MSG_STATUS_COMSERR_BIT ? " COMSERR" : "");
 
         mxtdata->t6_status = status;
     }
@@ -1232,18 +1228,14 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
 static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report_id)
 {
     int ret_val = 0;
-    if (report_id == mxtdata->T6_reportid)
+    if (report_id == mxtdata->T6_msg_reportid)
     {
         ret_val = 6;
     }
-    else if (report_id >= mxtdata->T15_reportid_min &&
-             report_id <= mxtdata->T15_reportid_max)
+    else if (report_id >= mxtdata->T15_msg_reportid_min &&
+             report_id <= mxtdata->T15_msg_reportid_max)
     {
         ret_val = 15;
-    }
-    else if (report_id == mxtdata->T19_reportid)
-    {
-        ret_val = 19;
     }
     else if (report_id == mxtdata->T92_reportid)
     {
@@ -1268,7 +1260,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
     bool dump = mxtdata->debug_enabled;
     bool no_inputdev_or_suspended = !mxtdata->inputdev || mxtdata->suspended;
 
-    if (MXT_RPTID_NOMSG == report_id)
+    if (MXT_T5_REPORTID_VAL_NOMSG == report_id)
     {
         return 0;
     }
@@ -1361,7 +1353,7 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
 
     /* Process remaining messages if necessary */
     ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                             mxtdata->T5_address,
+                             mxtdata->T5_cfg_address,
                              mxtdata->T5_msg_size * count,
                              mxtdata->msg_buf);
     if (ret_val)
@@ -1567,7 +1559,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    reg = mxtdata->T6_address + cmd_offset;
+    reg = mxtdata->T6_cfg_address + cmd_offset;
 
     ret_val = mxt_write_reg(mxtdata->i2cclient, reg, cmd_value);
     if (ret_val)
@@ -1612,7 +1604,7 @@ static int mxt_soft_reset(struct mxt_data *mxtdata)
 
     reinit_completion(&mxtdata->reset_completion);
 
-    ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_RESET_VALUE, false/*wait*/);
+    ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_CFG_RESET_OFFSET, MXT_T6_CFG_RESET_VAL_TO_APP, false/*wait*/);
     if (ret_val)
     {
         return ret_val;
@@ -1707,19 +1699,19 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
         return 0;
     }
 
-    if (mxtdata->T18_address)
+    if (mxtdata->T18_cfg_address)
     {
         ret_val = __mxt_read_reg(i2cclient,
-                                 mxtdata->T18_address + MXT_COMMS_CTRL,
+                                 mxtdata->T18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
                                  1, &val);
         if (ret_val)
         {
             return ret_val;
         }
 
-        if (val & MXT_COMMS_RETRIGEN)
+        if (val & MXT_T18_CFG_CTRL_RETRIGEN_BIT)
         {
-            return 0;
+            return 0; // RETRIGEN enabled
         }
     }
 
@@ -1914,7 +1906,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
     cfg.raw[fw->size] = '\0';
     cfg.raw_size = fw->size;
 
-    mxt_update_crc(mxtdata, MXT_T6_COMMAND_REPORTALL, MXT_T6_REPORTALL_VALUE);
+    mxt_update_crc(mxtdata, MXT_T6_CFG_REPORTALL_OFFSET, MXT_T6_CFG_REPORTALL_VAL_EXEC);
 
     if (0 != strncmp(cfg.raw, MXT_CFG_MAGIC, strlen(MXT_CFG_MAGIC)))
     {
@@ -2020,9 +2012,9 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
     {
         crc_start = mxtdata->T71_address;
     }
-    else if (mxtdata->T7_address)
+    else if (mxtdata->T7_cfg_address)
     {
-        crc_start = mxtdata->T7_address;
+        crc_start = mxtdata->T7_cfg_address;
     }
     else
     {
@@ -2047,7 +2039,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
         goto release_mem;
     }
 
-    mxt_update_crc(mxtdata, MXT_T6_COMMAND_BACKUPNV, MXT_T6_BACKUP_VALUE);
+    mxt_update_crc(mxtdata, MXT_T6_CFG_BACKUPNV_OFFSET, MXT_T6_CFG_BACKUPNV_VAL_TO_NVM);
 
     ret_val = mxt_check_retrigen(mxtdata);
     if (ret_val)
@@ -2082,7 +2074,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
 
     if (!mxtdata->irq)
     {
-        mxtdata->irq = gpio_to_irq(mxtdata->mxtplatform->gpio_irq);
+        mxtdata->irq = gpio_to_irq(mxtdata->mxtplatform->gpio_chg_irq);
         ret_val = request_threaded_irq(mxtdata->irq,
                                        NULL,
                                        mxt_interrupt,
@@ -2096,7 +2088,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
         }
 
         /* Presence of mxtdata->irq means IRQ initialised */
-        dev_info(&mxtdata->i2cclient->dev, "gpio_to_irq %lu -> %d\n", mxtdata->mxtplatform->gpio_irq, mxtdata->irq);
+        dev_info(&mxtdata->i2cclient->dev, "gpio_to_irq %lu -> %d\n", mxtdata->mxtplatform->gpio_chg_irq, mxtdata->irq);
     }
     else
     {
@@ -2145,17 +2137,14 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->raw_info_block = NULL;
     kfree(mxtdata->msg_buf);
     mxtdata->msg_buf = NULL;
-    mxtdata->T5_address = 0;
+    mxtdata->T5_cfg_address = 0;
     mxtdata->T5_msg_size = 0;
-    mxtdata->T6_reportid = 0;
-    mxtdata->T7_address = 0;
-    mxtdata->T8_address = 0;
-    mxtdata->T8_msg_size=0;
+    mxtdata->T6_msg_reportid = 0;
+    mxtdata->T7_cfg_address = 0;
     mxtdata->T71_address = 0;
-    mxtdata->T15_reportid_min = 0;
-    mxtdata->T15_reportid_max = 0;
-    mxtdata->T18_address = 0;
-    mxtdata->T19_reportid = 0;
+    mxtdata->T15_msg_reportid_min = 0;
+    mxtdata->T15_msg_reportid_max = 0;
+    mxtdata->T18_cfg_address = 0;
     mxtdata->T44_address = 0;
     mxtdata->T92_reportid = 0;
     mxtdata->T92_address = 0;
@@ -2166,8 +2155,7 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->max_reportid = 0;
 }
 
-static int mxt_parse_object_table(struct mxt_data *mxtdata,
-                                  struct mxt_object *object_table)
+static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *object_table)
 {
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int i;
@@ -2206,7 +2194,7 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
 
         switch (object->type)
         {
-            case MXT_GEN_MESSAGE_T5:
+            case MXT_GEN_MESSAGEPROCESSOR_T5:
                 if (mxtdata->mxtinfo->family_id == 0x80 &&
                         mxtdata->mxtinfo->version < 0x20)
                 {
@@ -2222,30 +2210,27 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
                     /* CRC not enabled, so skip last byte */
                     mxtdata->T5_msg_size = mxt_obj_size(object) - 1;
                 }
-                mxtdata->T5_address = object->start_address;
+                mxtdata->T5_cfg_address = object->start_address;
                 break;
-            case MXT_GEN_COMMAND_T6:
-                mxtdata->T6_reportid = min_id;
-                mxtdata->T6_address = object->start_address;
+            case MXT_GEN_COMMANDPROCESSOR_T6:
+                mxtdata->T6_msg_reportid = min_id;
+                mxtdata->T6_cfg_address = object->start_address;
                 break;
-            case MXT_GEN_POWER_T7:
-                mxtdata->T7_address = object->start_address;
+            case MXT_GEN_POWERCONFIG_T7:
+                mxtdata->T7_cfg_address = object->start_address;
                 break;
             case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
                 mxtdata->T71_address = object->start_address;
                 break;
             case MXT_TOUCH_KEYARRAY_T15:
-                mxtdata->T15_reportid_min = min_id;
-                mxtdata->T15_reportid_max = max_id;
+                mxtdata->T15_msg_reportid_min = min_id;
+                mxtdata->T15_msg_reportid_max = max_id;
                 break;
             case MXT_SPT_COMMSCONFIG_T18:
-                mxtdata->T18_address = object->start_address;
+                mxtdata->T18_cfg_address = object->start_address;
                 break;
             case MXT_SPT_MESSAGECOUNT_T44:
                 mxtdata->T44_address = object->start_address;
-                break;
-            case MXT_SPT_GPIOPWM_T19:
-                mxtdata->T19_reportid = min_id;
                 break;
             case MXT_PROCI_SYMBOLGESTUREPROCESSOR:
                 mxtdata->T92_reportid = min_id;
@@ -2268,9 +2253,6 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
             case MXT_PROCI_ACTIVESTYLUS_T107:
                 mxtdata->T107_address = object->start_address;
                 break;
-            case MXT_GEN_ACQUIRE_T8:
-                mxtdata->T8_address = object->start_address;
-                mxtdata->T8_msg_size = mxt_obj_size(object);
         }
 
         end_address = object->start_address + mxt_obj_size(object) * mxt_obj_instances(object) - 1;
@@ -2284,7 +2266,7 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata,
     mxtdata->max_reportid = reportid;
 
     /* If T44 exists, T5 position has to be directly after */
-    if (mxtdata->T44_address && (mxtdata->T5_address != mxtdata->T44_address + 1))
+    if (mxtdata->T44_address && (mxtdata->T5_cfg_address != mxtdata->T44_address + 1))
     {
         dev_err(&i2cclient->dev, "Invalid T44 position\n");
         return -EINVAL;
@@ -2470,7 +2452,7 @@ static int mxt_probe_regulators(struct mxt_data *mxtdata)
         ret_val = -EINVAL;
         goto fail;
     }
-    if (!gpio_is_valid(mxtdata->mxtplatform->gpio_irq))
+    if (!gpio_is_valid(mxtdata->mxtplatform->gpio_chg_irq))
     {
         ret_val = -EINVAL;
         goto fail;
@@ -2505,7 +2487,7 @@ fail:
     mxtdata->reg_vdd = NULL;
     mxtdata->reg_avdd = NULL;
     gpio_free(mxtdata->mxtplatform->gpio_reset);
-    gpio_free(mxtdata->mxtplatform->gpio_irq);
+    gpio_free(mxtdata->mxtplatform->gpio_chg_irq);
     return ret_val;
 }
 
@@ -2816,7 +2798,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
 
     /* For T15 Key Array */
-    if (mxtdata->T15_reportid_min)
+    if (mxtdata->T15_msg_reportid_min)
     {
         mxtdata->t15_keystatus = 0;
 
@@ -3030,23 +3012,23 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
 {
     struct device *dev = &mxtdata->i2cclient->dev;
     int ret_val;
-    struct t7_config *new_config;
-    struct t7_config deepsleep = { .active = 0, .idle = 0 };
+    struct t7_powerconfig *new_config;
+    struct t7_powerconfig deepsleep = { .active = 0, .idle = 0 };
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    if (sleep == MXT_POWER_CFG_DEEPSLEEP)
+    if (sleep == MXT_T7_POWER_CFG_DEEPSLEEP)
     {
         new_config = &deepsleep;
     }
     else
     {
-        new_config = &mxtdata->t7_cfg;
+        new_config = &mxtdata->t7_powercfg;
     }
 
     ret_val = __mxt_write_reg(mxtdata->i2cclient,
-                              mxtdata->T7_address,
-                              sizeof(mxtdata->t7_cfg),
+                              mxtdata->T7_cfg_address,
+                              sizeof(mxtdata->t7_powercfg),
                               new_config);
     if (0 == ret_val)
     {
@@ -3067,14 +3049,14 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
     for (retry = 0; retry < 2; retry++)
     {
         ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                                 mxtdata->T7_address,
-                                 sizeof(mxtdata->t7_cfg),
-                                 &mxtdata->t7_cfg);
+                                 mxtdata->T7_cfg_address,
+                                 sizeof(mxtdata->t7_powercfg),
+                                 &mxtdata->t7_powercfg);
         if (ret_val)
         {
             return ret_val;
         }
-        if (0 == mxtdata->t7_cfg.active || 0 == mxtdata->t7_cfg.idle)
+        if (0 == mxtdata->t7_powercfg.active || 0 == mxtdata->t7_powercfg.idle)
         {
             if (0 == retry)
             {
@@ -3084,9 +3066,9 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
             else
             {
                 dev_dbg(dev, "T7 cfg zero after reset, overriding\n");
-                mxtdata->t7_cfg.active = 20;
-                mxtdata->t7_cfg.idle = 100;
-                ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_POWER_CFG_RUN);
+                mxtdata->t7_powercfg.active = 20;
+                mxtdata->t7_powercfg.idle = 100;
+                ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_RUN);
             }
         }
         else
@@ -3095,7 +3077,7 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
         }
     }
 
-    dev_dbg(dev, "Init T7: ACTV %d IDLE %d\n", mxtdata->t7_cfg.active, mxtdata->t7_cfg.idle);
+    dev_dbg(dev, "Init T7: ACTV %d IDLE %d\n", mxtdata->t7_powercfg.active, mxtdata->t7_powercfg.idle);
 
     return ret_val;
 }
@@ -3215,9 +3197,9 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
         object = mxtdata->object_table + i;
         switch (object->type)
         {
-            case MXT_GEN_COMMAND_T6:
-            case MXT_GEN_POWER_T7:
-            case MXT_GEN_ACQUIRE_T8:
+            case MXT_GEN_COMMANDPROCESSOR_T6:
+            case MXT_GEN_POWERCONFIG_T7:
+            case GEN_ACQUISITIONCONFIG_T8:
             case MXT_TOUCH_KEYARRAY_T15:
             case MXT_SPT_COMMSCONFIG_T18:
             case MXT_SPT_GPIOPWM_T19:
@@ -3267,7 +3249,7 @@ done:
 
 static u8 mxt_read_chg(struct mxt_data *mxtdata)
 {
-    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_irq);
+    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_chg_irq);
     return ret_val;
 }
 
@@ -3385,7 +3367,7 @@ static int mxt_enter_bootloader(struct mxt_data *mxtdata)
         disable_irq(mxtdata->irq);
 
         /* Change to the bootloader mode */
-        ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_RESET, MXT_T6_BOOT_VALUE, false/*wait*/);
+        ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_CFG_RESET_OFFSET, MXT_T6_CFG_RESET_VAL_TO_BOOTL, false/*wait*/);
         if (ret_val)
         {
             return ret_val;
@@ -3671,7 +3653,7 @@ static ssize_t mxt_devattr_update_cfg_store(struct device *dev,
         }
         else if (mxtplatform->suspend_mode == MXT_SUSPEND_DEEP_SLEEP)
         {
-            mxt_set_t7_power_cfg(mxtdata, MXT_POWER_CFG_RUN);
+            mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_RUN);
             (void)mxt_acquire_irq(mxtdata);
         }
 
@@ -3899,7 +3881,7 @@ static int mxt_start(struct mxt_data *mxtdata)
              */
             (void)mxt_process_messages_until_invalid(mxtdata);
 
-            ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_POWER_CFG_RUN);
+            ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_RUN);
             if (ret_val)
             {
                 return ret_val;
@@ -3907,7 +3889,7 @@ static int mxt_start(struct mxt_data *mxtdata)
             mxt_set_t100_multitouchscreen_cfg(mxtdata, 0, (MXT_T100_CFG_CTRL_ENABLE_BIT | MXT_T100_CFG_CTRL_RPTEN_BIT | MXT_T100_CFG_CTRL_DISSCRMSG_BIT | MXT_T100_CFG_CTRL_SCANEN_BIT));
 
             /* Recalibrate since chip has been in deep sleep */
-            ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_COMMAND_CALIBRATE, MXT_T6_CALIBRATE_VALUE, false/*wait*/);
+            ret_val = mxt_send_t6_command_processor(mxtdata, MXT_T6_CFG_CALIBRATE_OFFSET, MXT_T6_CFG_CALIBRATE_VAL_EXEC, false/*wait*/);
             if (ret_val)
             {
                 return ret_val;
@@ -3966,12 +3948,12 @@ static int mxt_stop(struct mxt_data *mxtdata)
             if(mxtdata->double_tap_enable == 1)
             {
                 mxt_t93_configuration(mxtdata, 0, MXT_T93_ENABLE);
-                mxt_set_t7_power_cfg(mxtdata, MXT_POWER_CFG_GESTURE);
+                mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_GESTURE);
                 //mxt_wake_irq_enable(mxtdata);
             }
             else
             {
-                ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_POWER_CFG_DEEPSLEEP);
+                ret_val = mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_DEEPSLEEP);
                 if (ret_val)
                 {
                     return ret_val;
@@ -4046,7 +4028,7 @@ static const struct mxt_platform_data *mxt_platform_data_get_from_device_tree(st
     }
 
     mxtplatform->gpio_reset = of_get_named_gpio_flags(devnode, "atmel,reset-gpio", 0, NULL);
-    mxtplatform->gpio_irq = of_get_named_gpio_flags(devnode, "atmel,irq-gpio", 0, NULL);
+    mxtplatform->gpio_chg_irq = of_get_named_gpio_flags(devnode, "atmel,irq-gpio", 0, NULL);
 
     ret_val = of_property_read_string(devnode, "atmel,cfg_name", &mxtplatform->cfg_name);
     if (ret_val)
@@ -4289,19 +4271,19 @@ static int mxt_gpio_setup(struct mxt_data *mxtdata)
 {
     int ret_val;
 
-    ret_val = gpio_request(mxtdata->mxtplatform->gpio_irq, "irq-gpio");
+    ret_val = gpio_request(mxtdata->mxtplatform->gpio_chg_irq, "irq-gpio");
     if (ret_val)
     {
-        dev_err(&mxtdata->i2cclient->dev, "gpio_request %lu (%d)", mxtdata->mxtplatform->gpio_irq, ret_val);
+        dev_err(&mxtdata->i2cclient->dev, "gpio_request %lu (%d)", mxtdata->mxtplatform->gpio_chg_irq, ret_val);
         return ret_val;
     }
-    ret_val = gpio_direction_input(mxtdata->mxtplatform->gpio_irq);
+    ret_val = gpio_direction_input(mxtdata->mxtplatform->gpio_chg_irq);
     if (ret_val)
     {
-        dev_err(&mxtdata->i2cclient->dev, "gpio_direction_input %lu (%d)", mxtdata->mxtplatform->gpio_irq, ret_val);
+        dev_err(&mxtdata->i2cclient->dev, "gpio_direction_input %lu (%d)", mxtdata->mxtplatform->gpio_chg_irq, ret_val);
         return ret_val;
     }
-    dev_dbg(&mxtdata->i2cclient->dev, "gpio_irq %lu IN %d\n", mxtdata->mxtplatform->gpio_irq, mxt_read_chg(mxtdata));
+    dev_dbg(&mxtdata->i2cclient->dev, "gpio_chg_irq %lu IN %d\n", mxtdata->mxtplatform->gpio_chg_irq, mxt_read_chg(mxtdata));
 
     ret_val = gpio_request(mxtdata->mxtplatform->gpio_reset, "reset-gpio");
     if (ret_val)
@@ -4416,7 +4398,7 @@ err_free_irq:
     }
 
     gpio_free(mxtdata->mxtplatform->gpio_reset);
-    gpio_free(mxtdata->mxtplatform->gpio_irq);
+    gpio_free(mxtdata->mxtplatform->gpio_chg_irq);
     if(mxtdata->reg_vdd)
     {
         regulator_put(mxtdata->reg_vdd);
@@ -4446,7 +4428,7 @@ static int mxt_remove(struct i2c_client *i2cclient)
     }
 
     gpio_free(mxtdata->mxtplatform->gpio_reset);
-    gpio_free(mxtdata->mxtplatform->gpio_irq);
+    gpio_free(mxtdata->mxtplatform->gpio_chg_irq);
 
     if(mxtdata->reg_avdd)
     {
