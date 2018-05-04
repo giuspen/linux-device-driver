@@ -342,6 +342,7 @@ struct mxt_data
     u16 T5_cfg_address;
     u16 T6_cfg_address;
     u16 T7_cfg_address;
+    u16 T15_cfg_address;
     u16 T18_cfg_address;
     u16 T44_cfg_address;
     u16 T71_cfg_address;
@@ -352,14 +353,9 @@ struct mxt_data
     // size of the largest possible messages
     u8 T5_msg_size;
 
-    // objects that support sendine messages
-    // whose content we want to parse
+    // objects that support sending messages
+    // whose report_id we want to cache
     u8 T6_msg_reportid;
-    u8 T15_msg_reportid_min;
-    u8 T15_msg_reportid_max;
-    u8 T19_msg_reportid;
-    u8 T92_msg_reportid;
-    u8 T93_msg_reportid;
     u8 T100_msg_reportid_min;
     u8 T100_msg_reportid_max;
 
@@ -379,12 +375,12 @@ struct mxt_data
     bool updating_config;
 };
 
-static size_t mxt_obj_size(const struct mxt_object *obj)
+static size_t mxt_get_obj_size(const struct mxt_object *obj)
 {
     return obj->size_minus_one + 1;
 }
 
-static size_t mxt_obj_instances(const struct mxt_object *obj)
+static size_t mxt_get_obj_num_instances(const struct mxt_object *obj)
 {
     return obj->instances_minus_one + 1;
 }
@@ -1230,7 +1226,7 @@ static void mxt_recv_t100_multiple_touch(struct mxt_data *mxtdata, u8 *message)
     mxtdata->update_input = true;
 }
 
-static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report_id)
+static int mxt_get_obj_type_from_report_id(struct mxt_data *mxtdata, u8 report_id)
 {
     int ret_val = 0;
     if (report_id >= mxtdata->T100_msg_reportid_min &&
@@ -1242,22 +1238,27 @@ static int mxt_get_object_num_from_report_id(struct mxt_data *mxtdata, u8 report
     {
         ret_val = 6;
     }
-    else if (report_id >= mxtdata->T15_msg_reportid_min &&
-             report_id <= mxtdata->T15_msg_reportid_max)
+    else
     {
-        ret_val = 15;
-    }
-    else if (report_id == mxtdata->T19_msg_reportid)
-    {
-        ret_val = 19;
-    }
-    else if (report_id == mxtdata->T92_msg_reportid)
-    {
-        ret_val = 92;
-    }
-    else if (report_id == mxtdata->T93_msg_reportid)
-    {
-        ret_val = 93;
+        /* Valid Report IDs start counting from 1 */
+        u8 curr_rep_id = 1;
+        int i;
+        for (i = 0; i < mxtdata->mxtinfo->object_num; i++)
+        {
+            struct mxt_object *object = mxtdata->object_table + i;
+            if (object->num_report_ids)
+            {
+                u8 max_rep_id;
+                u8 min_rep_id = curr_rep_id;
+                curr_rep_id += object->num_report_ids * mxt_get_obj_num_instances(object);
+                max_rep_id = curr_rep_id - 1;
+                if (report_id >= min_rep_id && report_id <= max_rep_id)
+                {
+                    ret_val = object->type;
+                    break;
+                }
+            }
+        }
     }
     return ret_val;
 }
@@ -1274,7 +1275,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         return 0;
     }
 
-    object_number = mxt_get_object_num_from_report_id(mxtdata, report_id);
+    object_number = mxt_get_obj_type_from_report_id(mxtdata, report_id);
 
     if (0 == object_number)
     {
@@ -1775,16 +1776,16 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
             continue;
         }
 
-        if (size > mxt_obj_size(object))
+        if (size > mxt_get_obj_size(object))
         {
             /*
              * Either we are in fallback mode due to wrong
              * config or config from a later fw version,
              * or the file is corrupt or hand-edited.
              */
-            dev_warn(dev, "Discarding %zu byte(s) in T%u\n", size - mxt_obj_size(object), type);
+            dev_warn(dev, "Discarding %zu byte(s) in T%u\n", size - mxt_get_obj_size(object), type);
         }
-        else if (mxt_obj_size(object) > size)
+        else if (mxt_get_obj_size(object) > size)
         {
             /*
              * If firmware is upgraded, new bytes may be added to
@@ -1795,16 +1796,16 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
              * updated. We warn here but do nothing else - the
              * malloc has zeroed the entire configuration.
              */
-            dev_warn(dev, "Zeroing %zu byte(s) in T%d\n", mxt_obj_size(object) - size, type);
+            dev_warn(dev, "Zeroing %zu byte(s) in T%d\n", mxt_get_obj_size(object) - size, type);
         }
 
-        if (instance >= mxt_obj_instances(object))
+        if (instance >= mxt_get_obj_num_instances(object))
         {
             dev_err(dev, "Object instances exceeded!\n");
             return -EINVAL;
         }
 
-        reg = object->start_address + mxt_obj_size(object) * instance;
+        reg = object->start_address + mxt_get_obj_size(object) * instance;
 
         for (i = 0; i < size; i++)
         {
@@ -1816,7 +1817,7 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
             }
             cfg->raw_pos += offset;
 
-            if (i > mxt_obj_size(object))
+            if (i > mxt_get_obj_size(object))
             {
                 continue;
             }
@@ -2150,6 +2151,7 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->T5_cfg_address = 0;
     mxtdata->T6_cfg_address = 0;
     mxtdata->T7_cfg_address = 0;
+    mxtdata->T15_cfg_address = 0;
     mxtdata->T18_cfg_address = 0;
     mxtdata->T44_cfg_address = 0;
     mxtdata->T71_cfg_address = 0;
@@ -2160,11 +2162,6 @@ static void mxt_free_object_table(struct mxt_data *mxtdata)
     mxtdata->T5_msg_size = 0;
 
     mxtdata->T6_msg_reportid = 0;
-    mxtdata->T15_msg_reportid_min = 0;
-    mxtdata->T15_msg_reportid_max = 0;
-    mxtdata->T19_msg_reportid = 0;
-    mxtdata->T92_msg_reportid = 0;
-    mxtdata->T93_msg_reportid = 0;
     mxtdata->T100_msg_reportid_min = 0;
     mxtdata->T100_msg_reportid_max = 0;
 
@@ -2175,38 +2172,38 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
 {
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int i;
-    u8 reportid;
-    u16 end_address;
+    u8 curr_rep_id = 1; /* Valid Report IDs start counting from 1 */
+    u16 curr_end_address = 0;
 
     dev_info(&i2cclient->dev, "%s, object_num = %d\n", __func__, mxtdata->mxtinfo->object_num);
 
-    /* Valid Report IDs start counting from 1 */
-    reportid = 1;
     mxtdata->mem_size = 0;
     for (i = 0; i < mxtdata->mxtinfo->object_num; i++)
     {
         struct mxt_object *object = object_table + i;
-        u8 min_id, max_id;
+        u8 min_rep_id, max_rep_id;
 
+        // object start_address from little endian to local CPU endianness **IN PLACE**
+        // IMPORTANT: this is only for the first loop throuch the object table
         le16_to_cpus(&object->start_address);
 
         if (object->num_report_ids)
         {
-            min_id = reportid;
-            reportid += object->num_report_ids * mxt_obj_instances(object);
-            max_id = reportid - 1;
+            min_rep_id = curr_rep_id;
+            curr_rep_id += object->num_report_ids * mxt_get_obj_num_instances(object);
+            max_rep_id = curr_rep_id - 1;
         }
         else
         {
-            min_id = 0;
-            max_id = 0;
+            min_rep_id = 0;
+            max_rep_id = 0;
         }
 
         dev_dbg(&mxtdata->i2cclient->dev,
                 "T%u Start:%u Size:%zu Instances:%zu Report IDs:%u-%u\n",
                 object->type, object->start_address,
-                mxt_obj_size(object), mxt_obj_instances(object),
-                min_id, max_id);
+                mxt_get_obj_size(object), mxt_get_obj_num_instances(object),
+                min_rep_id, max_rep_id);
 
         switch (object->type)
         {
@@ -2220,17 +2217,17 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
                      * read and discard unused CRC byte otherwise
                      * DMA reads are misaligned.
                      */
-                    mxtdata->T5_msg_size = mxt_obj_size(object);
+                    mxtdata->T5_msg_size = mxt_get_obj_size(object);
                 }
                 else
                 {
                     /* CRC not enabled, so skip last byte */
-                    mxtdata->T5_msg_size = mxt_obj_size(object) - 1;
+                    mxtdata->T5_msg_size = mxt_get_obj_size(object) - 1;
                 }
                 break;
             case MXT_GEN_COMMANDPROCESSOR_T6:
                 mxtdata->T6_cfg_address = object->start_address;
-                mxtdata->T6_msg_reportid = min_id;
+                mxtdata->T6_msg_reportid = min_rep_id;
                 break;
             case MXT_GEN_POWERCONFIG_T7:
                 mxtdata->T7_cfg_address = object->start_address;
@@ -2238,31 +2235,23 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
             case MXT_SPT_COMMSCONFIG_T18:
                 mxtdata->T18_cfg_address = object->start_address;
                 break;
-            case MXT_SPT_GPIOPWM_T19:
-                mxtdata->T19_msg_reportid = object->start_address;
-                break;
             case MXT_SPT_DYNAMICCONFIGURATIONCONTAINER_T71:
                 mxtdata->T71_cfg_address = object->start_address;
                 break;
             case MXT_TOUCH_KEYARRAY_T15:
-                mxtdata->T15_msg_reportid_min = min_id;
-                mxtdata->T15_msg_reportid_max = max_id;
+                mxtdata->T15_cfg_address = object->start_address;
                 break;
             case MXT_SPT_MESSAGECOUNT_T44:
                 mxtdata->T44_cfg_address = object->start_address;
                 break;
-            case MXT_PROCI_SYMBOLGESTUREPROCESSOR_T92:
-                mxtdata->T92_msg_reportid = min_id;
-                break;
             case MXT_PROCI_TOUCHSEQUENCELOGGER_T93:
                 mxtdata->T93_cfg_address = object->start_address;
-                mxtdata->T93_msg_reportid = min_id;
                 break;
             case MXT_TOUCH_MULTITOUCHSCREEN_T100:
                 mxtdata->multitouch = MXT_TOUCH_MULTITOUCHSCREEN_T100;
                 mxtdata->T100_cfg_address = object->start_address;
-                mxtdata->T100_msg_reportid_min = min_id;
-                mxtdata->T100_msg_reportid_max = max_id;
+                mxtdata->T100_msg_reportid_min = min_rep_id;
+                mxtdata->T100_msg_reportid_max = max_rep_id;
                 // First Report ID is Screen Status Messages
                 // Second Report ID is Reserved
                 // Subsequent Report IDs are Touch Status Messages
@@ -2273,15 +2262,15 @@ static int mxt_parse_object_table(struct mxt_data *mxtdata, struct mxt_object *o
                 break;
         }
 
-        end_address = object->start_address + mxt_obj_size(object) * mxt_obj_instances(object) - 1;
-        if (end_address >= mxtdata->mem_size)
+        curr_end_address = object->start_address + mxt_get_obj_size(object) * mxt_get_obj_num_instances(object) - 1;
+        if (curr_end_address >= mxtdata->mem_size)
         {
-            mxtdata->mem_size = end_address + 1;
+            mxtdata->mem_size = curr_end_address + 1;
         }
     }
 
     /* Store maximum reportid */
-    mxtdata->max_reportid = reportid;
+    mxtdata->max_reportid = curr_rep_id;
 
     /* If T44 exists, T5 position has to be directly after */
     if (mxtdata->T44_cfg_address && (mxtdata->T5_cfg_address != mxtdata->T44_cfg_address + 1))
@@ -2816,7 +2805,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
 
     /* For T15 Key Array */
-    if (mxtdata->T15_msg_reportid_min)
+    if (mxtdata->T15_cfg_address)
     {
         mxtdata->t15_keystatus = 0;
 
@@ -2827,7 +2816,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
 
     /* For double tap */
-    if (mxtdata->T93_msg_reportid)
+    if (mxtdata->T93_cfg_address)
     {
         input_set_capability(inputdev, EV_KEY, KEY_WAKEUP);
     }
@@ -3180,11 +3169,11 @@ static ssize_t mxt_show_instance(char *buf, int count,
 {
     int i;
 
-    if (mxt_obj_instances(object) > 1)
+    if (mxt_get_obj_num_instances(object) > 1)
         count += scnprintf(buf + count, PAGE_SIZE - count,
                            "Instance %u\n", instance);
 
-    for (i = 0; i < mxt_obj_size(object); i++)
+    for (i = 0; i < mxt_get_obj_size(object); i++)
         count += scnprintf(buf + count, PAGE_SIZE - count,
                            "\t[%2u]: %02x (%d)\n", i, val[i], val[i]);
     count += scnprintf(buf + count, PAGE_SIZE - count, "\n");
@@ -3241,9 +3230,9 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
 
                 count += scnprintf(buf + count, PAGE_SIZE - count, "T%u:\n", object->type);
 
-                for (j = 0; j < mxt_obj_instances(object); j++)
+                for (j = 0; j < mxt_get_obj_num_instances(object); j++)
                 {
-                    u16 size = mxt_obj_size(object);
+                    u16 size = mxt_get_obj_size(object);
                     u16 addr = object->start_address + j * size;
 
                     ret_val = mxt_read_blks(mxtdata, addr, size, obuf);
