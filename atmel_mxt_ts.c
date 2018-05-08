@@ -924,7 +924,6 @@ static struct mxt_object * mxt_get_object(struct mxt_data *mxtdata, u8 type)
 
 static void mxt_recv_t19_gpio_msg(struct mxt_data *mxtdata, u8 *message)
 {
-    struct input_dev *inputdev = mxtdata->inputdev;
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
 
@@ -935,7 +934,7 @@ static void mxt_recv_t19_gpio_msg(struct mxt_data *mxtdata, u8 *message)
         if (mxtplatform->t19_gpio_keymap[i] != KEY_RESERVED)
         {
             /* Active-low switch */
-            input_report_key(inputdev, mxtplatform->t19_gpio_keymap[i], 0 == (message[1] & (1 << i)));
+            input_report_key(mxtdata->inputdev, mxtplatform->t19_gpio_keymap[i], 0 == (message[1] & (1 << i)));
         }
     }
 }
@@ -993,8 +992,6 @@ static void mxt_recv_t6_command_processor_msg(struct mxt_data *mxtdata, u8 *msg)
 
 static void mxt_recv_t15_key_array_msg(struct mxt_data *mxtdata, u8 *msg)
 {
-    struct input_dev *inputdev = mxtdata->inputdev;
-    struct device *dev = &mxtdata->i2cclient->dev;
     int key;
     bool curr_state, new_state;
     bool sync = false;
@@ -1007,32 +1004,29 @@ static void mxt_recv_t15_key_array_msg(struct mxt_data *mxtdata, u8 *msg)
 
         if (!curr_state && new_state)
         {
-            dev_dbg(dev, "T15 key press: %u\n", key);
+            dev_dbg(&mxtdata->i2cclient->dev, "T15 key press: %u\n", key);
             __set_bit(key, &mxtdata->t15_keyarray_keystatus);
-            input_event(inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[key], 1);
+            input_event(mxtdata->inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[key], 1);
             sync = true;
         }
         else if (curr_state && !new_state)
         {
-            dev_dbg(dev, "T15 key release: %u\n", key);
+            dev_dbg(&mxtdata->i2cclient->dev, "T15 key release: %u\n", key);
             __clear_bit(key, &mxtdata->t15_keyarray_keystatus);
-            input_event(inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[key], 0);
+            input_event(mxtdata->inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[key], 0);
             sync = true;
         }
     }
 
     if (sync)
     {
-        input_sync(inputdev);
+        input_sync(mxtdata->inputdev);
     }
 }
 
 static void mxt_recv_t93_touch_sequence_msg(struct mxt_data *mxtdata, u8 *msg)
 {
-    struct device *dev = &mxtdata->i2cclient->dev;
-    u8 status = msg[1];
-
-    dev_dbg(dev, "T93 double tap %d\n", status);
+    dev_dbg(&mxtdata->i2cclient->dev, "T93 double tap %d\n", msg[1]);
 
     input_report_key(mxtdata->inputdev, KEY_WAKEUP, 1);
     input_sync(mxtdata->inputdev);
@@ -1200,7 +1194,9 @@ static void mxt_recv_t100_multiple_touch_msg(struct mxt_data *mxtdata, u8 *messa
         touch_pressure = MXT_TOUCH_PRESSURE_DEFAULT;
     }
 
-    // https://www.kernel.org/doc/Documentation/input/multi-touch-protocol.txt
+    /*
+     * https://www.kernel.org/doc/Documentation/input/multi-touch-protocol.txt
+     */
     input_mt_slot(inputdev, touch_id_slot);
 
     if (is_active)
@@ -2507,7 +2503,7 @@ fail:
     return ret_val;
 }
 
-static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, struct mxt_data *mxtdata)
+static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
 {
     struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
@@ -2531,7 +2527,7 @@ static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, str
     }
 
     /* Check enable bit */
-    if (!(ctrl_byte & 0x01))
+    if (0 == (ctrl_byte & 0x01))
     {
         return 0;
     }
@@ -2559,9 +2555,8 @@ static int mxt_input_device_set_up_active_stylus(struct input_dev *inputdev, str
         mxtdata->t100_stylus_aux_ypeak_idx = t100_msg_aux_byte_idx++;
     }
 
-    input_set_capability(inputdev, EV_KEY, BTN_STYLUS);
-    input_set_capability(inputdev, EV_KEY, BTN_STYLUS2);
-    input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
+    input_set_capability(mxtdata->inputdev, EV_KEY, BTN_STYLUS);
+    input_set_capability(mxtdata->inputdev, EV_KEY, BTN_STYLUS2);
 
     dev_dbg(&i2cclient->dev,
             "T107 on T100 aux - pressure:%u xpeak:%u ypeak:%u\n",
@@ -2649,27 +2644,32 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     return 0;
 }
 
-static void mxt_input_device_set_up_as_touchpad(struct input_dev *inputdev, struct mxt_data *mxtdata)
+static void mxt_input_device_set_up_as_touchpad(struct mxt_data *mxtdata)
 {
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     int i;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    inputdev->name = "Solomon Systech maXTouch Touchpad";
+    mxtdata->inputdev->name = "Solomon Systech maXTouch Touchpad";
 
-    __set_bit(INPUT_PROP_BUTTONPAD, inputdev->propbit);
+    /*
+     * https://www.kernel.org/doc/Documentation/input/event-codes.txt
+     * touchpads where the button is placed beneath the surface,
+     * such that pressing down on the pad causes a button click
+     */
+    __set_bit(INPUT_PROP_BUTTONPAD, mxtdata->inputdev->propbit);
 
-    input_abs_set_res(inputdev, ABS_X, MXT_PIXELS_PER_MM);
-    input_abs_set_res(inputdev, ABS_Y, MXT_PIXELS_PER_MM);
-    input_abs_set_res(inputdev, ABS_MT_POSITION_X, MXT_PIXELS_PER_MM);
-    input_abs_set_res(inputdev, ABS_MT_POSITION_Y, MXT_PIXELS_PER_MM);
+    input_abs_set_res(mxtdata->inputdev, ABS_X, MXT_PIXELS_PER_MM);
+    input_abs_set_res(mxtdata->inputdev, ABS_Y, MXT_PIXELS_PER_MM);
+    input_abs_set_res(mxtdata->inputdev, ABS_MT_POSITION_X, MXT_PIXELS_PER_MM);
+    input_abs_set_res(mxtdata->inputdev, ABS_MT_POSITION_Y, MXT_PIXELS_PER_MM);
 
     for (i = 0; i < mxtplatform->t19_gpio_num_keys; i++)
     {
         if (mxtplatform->t19_gpio_keymap[i] != KEY_RESERVED)
         {
-            input_set_capability(inputdev, EV_KEY, mxtplatform->t19_gpio_keymap[i]);
+            input_set_capability(mxtdata->inputdev, EV_KEY, mxtplatform->t19_gpio_keymap[i]);
         }
     }
 }
@@ -2716,6 +2716,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     dev_info(dev, "Touchscreen size X%uY%u\n", mxtdata->t100_max_x, mxtdata->t100_max_y);
 
+    /* we allocate the device once while the device is registered and unregistered more times */
     if (!mxtdata->inputdev)
     {
         /* allocate memory for new managed input device (no need to free) */
@@ -2744,21 +2745,31 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     mxtdata->inputdev->close = mxt_input_close;
 #endif //INPUT_DEVICE_ALWAYS_OPEN
 
-    set_bit(EV_ABS, mxtdata->inputdev->evbit);
+    /* 
+     * https://www.kernel.org/doc/Documentation/input/input-programming.txt
+     * https://www.kernel.org/doc/Documentation/input/event-codes.txt
+     * https://www.kernel.org/doc/Documentation/input/multi-touch-protocol.txt
+     */
+
+    /* we support EV_ABS: absolute axis value changes */
+    set_bit(EV_ABS/*event type*/, mxtdata->inputdev->evbit);
+
+    /* we support EV_KEY: keyboards, buttons, or other key-like devices */
     input_set_capability(mxtdata->inputdev, EV_KEY/*event type*/, BTN_TOUCH/*event code*/);
 
-    /* For single touch */
-    input_set_abs_params(mxtdata->inputdev, ABS_X, 0, mxtdata->t100_max_x, 0, 0);
+    /* for single touch (no multi touch) */
+    input_set_abs_params(mxtdata->inputdev, ABS_X, 0, mxtdata->t100_max_x, 0/*fuzz,noise*/, 0/*flat position*/);
     input_set_abs_params(mxtdata->inputdev, ABS_Y, 0, mxtdata->t100_max_y, 0, 0);
+
     if (mxtdata->t100_aux_ampl_idx)
     {
         input_set_abs_params(mxtdata->inputdev, ABS_PRESSURE, 0, 255, 0, 0);
     }
 
-    /* If device has buttons we assume it is a touchpad */
+    /* if device has buttons we assume it is a touchpad */
     if (mxtplatform->t19_gpio_num_keys)
     {
-        mxt_input_device_set_up_as_touchpad(mxtdata->inputdev, mxtdata);
+        mxt_input_device_set_up_as_touchpad(mxtdata);
         mt_flags |= INPUT_MT_POINTER;
     }
     else
@@ -2766,7 +2777,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
         mt_flags |= INPUT_MT_DIRECT;
     }
 
-    /* For multi touch */
+    /* multi touch */
     ret_val = input_mt_init_slots(mxtdata->inputdev, mxtdata->t100_num_touchids, mt_flags);
     if (ret_val)
     {
@@ -2798,7 +2809,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     /* For T107 Active Stylus */
     if (mxtdata->t107_cfg_address)
     {
-        ret_val = mxt_input_device_set_up_active_stylus(mxtdata->inputdev, mxtdata);
+        ret_val = mxt_input_device_set_up_active_stylus(mxtdata);
         if (ret_val)
         {
             dev_err(dev, "Failed to read T107 config\n");
@@ -3829,20 +3840,19 @@ static void mxt_sysfs_mem_access_remove(struct mxt_data *mxtdata)
 
 static void mxt_reset_slots(struct mxt_data *mxtdata)
 {
-    struct input_dev *inputdev = mxtdata->inputdev;
     int id;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    if (!inputdev)
+    if (!mxtdata->inputdev)
     {
         return;
     }
 
     for (id = 0; id < mxtdata->t100_num_touchids; id++)
     {
-        input_mt_slot(inputdev, id);
-        input_mt_report_slot_state(inputdev, 0, false);
+        input_mt_slot(mxtdata->inputdev, id);
+        input_mt_report_slot_state(mxtdata->inputdev, 0, false);
     }
 
     mxt_input_sync(mxtdata);
@@ -4444,23 +4454,22 @@ static int __maybe_unused mxt_suspend(struct device *dev)
 {
     struct i2c_client *i2cclient = to_i2c_client(dev);
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
-    struct input_dev *inputdev = mxtdata->inputdev;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    if (!inputdev)
+    if (!mxtdata->inputdev)
     {
         return 0;
     }
 
-    mutex_lock(&inputdev->mutex);
+    mutex_lock(&mxtdata->inputdev->mutex);
 
-    if (inputdev->users)
+    if (mxtdata->inputdev->users)
     {
         (void)mxt_stop(mxtdata);
     }
 
-    mutex_unlock(&inputdev->mutex);
+    mutex_unlock(&mxtdata->inputdev->mutex);
 
     return 0;
 }
@@ -4469,23 +4478,22 @@ static int __maybe_unused mxt_resume(struct device *dev)
 {
     struct i2c_client *i2cclient = to_i2c_client(dev);
     struct mxt_data *mxtdata = i2c_get_clientdata(i2cclient);
-    struct input_dev *inputdev = mxtdata->inputdev;
 
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
-    if (!inputdev)
+    if (!mxtdata->inputdev)
     {
         return 0;
     }
 
-    mutex_lock(&inputdev->mutex);
+    mutex_lock(&mxtdata->inputdev->mutex);
 
-    if (inputdev->users)
+    if (mxtdata->inputdev->users)
     {
         (void)mxt_start(mxtdata);
     }
 
-    mutex_unlock(&inputdev->mutex);
+    mutex_unlock(&mxtdata->inputdev->mutex);
 
     return 0;
 }
