@@ -1272,7 +1272,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
     u8 report_id = message[0];
     int object_number;
     bool dump = mxtdata->debug_enabled;
-    bool no_inputdev_or_suspended = !mxtdata->inputdev || mxtdata->suspended;
+    bool msg_discarded = false;
 
     if (MXT_T5_REPORTID_VAL_NOMSG == report_id)
     {
@@ -1283,12 +1283,12 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
 
     if (0 == object_number)
     {
+        msg_discarded = true;
         dev_err(&mxtdata->i2cclient->dev, "-> Rid %d unhandled\n", report_id);
         dump = true;
     }
     else
     {
-        dev_dbg(&mxtdata->i2cclient->dev, "-> %c%d\n", no_inputdev_or_suspended ? 't':'T', object_number);
         if (6 == object_number)
         {
             mxt_recv_t6_command_processor_msg(mxtdata, message);
@@ -1299,6 +1299,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
              * Do not report events if input device is
              * not yet registered
              */
+            msg_discarded = true;
         }
         else if (93 == object_number)
         {
@@ -1310,6 +1311,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
              * Do not report events if input device is
              * returning from suspend
              */
+            msg_discarded = true;
         }
         else if (100 == object_number)
         {
@@ -1332,14 +1334,19 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
         }
         else
         {
-            dev_warn(&mxtdata->i2cclient->dev, "T%d unhandled", object_number);
+            msg_discarded = true;
+            dev_warn(&mxtdata->i2cclient->dev, "T%d unhandled\n", object_number);
             dump = true;
         }
     }
 
     if (dump)
     {
-        dev_dbg(&mxtdata->i2cclient->dev, "%c%d: %*ph\n", no_inputdev_or_suspended ? 't':'T', object_number, mxtdata->t5_msg_size, message);
+        dev_dbg(&mxtdata->i2cclient->dev, "%c%d: %*ph <\n", msg_discarded ? 't':'T', object_number, mxtdata->t5_msg_size, message);
+    }
+    else
+    {
+        dev_dbg(&mxtdata->i2cclient->dev, "msg %c%d <\n", msg_discarded ? 't':'T', object_number);
     }
 
     if (mxtdata->debug_v2_enabled)
@@ -1420,7 +1427,7 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
      */
     if (0 == count)
     {
-        dev_dbg(&mxtdata->i2cclient->dev, "? T44 no msgs\n");
+        //dev_dbg(&mxtdata->i2cclient->dev, "? T44 no msgs\n");
         return IRQ_NONE;
     }
 
@@ -2126,21 +2133,6 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
 static int mxt_input_open(struct input_dev *inputdev);
 static void mxt_input_close(struct input_dev *inputdev);
 
-static void mxt_free_input_device(struct mxt_data *mxtdata)
-{
-    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
-
-    if (mxtdata->inputdev)
-    {
-#ifdef INPUT_DEVICE_ALWAYS_OPEN
-        mxt_input_close(mxtdata->inputdev);
-#endif //INPUT_DEVICE_ALWAYS_OPEN
-
-        input_unregister_device(mxtdata->inputdev);
-        mxtdata->inputdev = NULL;
-    }
-}
-
 static void mxt_free_object_table(struct mxt_data *mxtdata)
 {
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
@@ -2711,8 +2703,8 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     dev_info(dev, "Touchscreen size X%uY%u\n", mxtdata->t100_max_x, mxtdata->t100_max_y);
 
-    /* Register input device */
-    inputdev = input_allocate_device();
+    /* allocate memory for new managed input device (no need to free or unregister) */
+    inputdev = devm_input_allocate_device(dev);
     if (!inputdev)
     {
         return -ENOMEM;
@@ -2763,7 +2755,7 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     if (ret_val)
     {
         dev_err(dev, "Error %d initialising slots\n", ret_val);
-        goto err_free_mem;
+        return ret_val;
     }
 
     input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
@@ -2821,25 +2813,21 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     if (ret_val)
     {
         dev_err(dev, "Error %d registering input device\n", ret_val);
-        goto err_free_mem;
+        return ret_val;
     }
 
     mxtdata->inputdev = inputdev;
-
-    dev_info(dev, "%s <\n", __func__);
 
 #ifdef INPUT_DEVICE_ALWAYS_OPEN
     mxt_input_open(mxtdata->inputdev);
 #endif //INPUT_DEVICE_ALWAYS_OPEN
 
-    return 0;
+    dev_info(dev, "%s <\n", __func__);
 
-err_free_mem:
-    input_free_device(inputdev);
-    return ret_val;
+    return 0;
 }
 
-static int mxt_t93_configuration(struct mxt_data *mxtdata, u16 cmd_offset, u8 status)
+static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 cmd_offset, u8 status)
 {
     u16 reg;
     u8 command_register;
@@ -3378,7 +3366,12 @@ static int mxt_enter_bootloader(struct mxt_data *mxtdata)
         mxtdata->in_bootloader = true;
         mxt_sysfs_debug_msg_remove(mxtdata);
         mxt_sysfs_mem_access_remove(mxtdata);
-        mxt_free_input_device(mxtdata);
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+        if (mxtdata->inputdev)
+        {
+            mxt_input_close(mxtdata->inputdev);
+        }
+#endif //INPUT_DEVICE_ALWAYS_OPEN
         mxt_free_object_table(mxtdata);
     }
 
@@ -3635,7 +3628,12 @@ static ssize_t mxt_devattr_update_cfg_store(struct device *dev,
 
     mxtdata->updating_config = true;
 
-    mxt_free_input_device(mxtdata);
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+    if (mxtdata->inputdev)
+    {
+        mxt_input_close(mxtdata->inputdev);
+    }
+#endif //INPUT_DEVICE_ALWAYS_OPEN
 
     if (mxtdata->suspended)
     {
@@ -3889,7 +3887,7 @@ static int mxt_start(struct mxt_data *mxtdata)
             }
             if (mxtdata->t93_cfg_address)
             {
-                mxt_t93_configuration(mxtdata, 0, MXT_T93_DISABLE);
+                mxt_set_t93_touchsequence_ena_dis_cfg(mxtdata, 0, MXT_T93_DISABLE);
             }
             if(mxtdata->double_tap_enable == 0)
             {
@@ -3940,7 +3938,7 @@ static int mxt_stop(struct mxt_data *mxtdata)
 
             if(mxtdata->double_tap_enable == 1)
             {
-                mxt_t93_configuration(mxtdata, 0, MXT_T93_ENABLE);
+                mxt_set_t93_touchsequence_ena_dis_cfg(mxtdata, 0, MXT_T93_ENABLE);
                 mxt_set_t7_power_cfg(mxtdata, MXT_T7_POWER_CFG_GESTURE);
                 //mxt_wake_irq_enable(mxtdata);
             }
@@ -4431,7 +4429,12 @@ static int mxt_remove(struct i2c_client *i2cclient)
     {
         regulator_put(mxtdata->reg_vdd);
     }
-    mxt_free_input_device(mxtdata);
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+    if (mxtdata->inputdev)
+    {
+        mxt_input_close(mxtdata->inputdev);
+    }
+#endif //INPUT_DEVICE_ALWAYS_OPEN
     mxt_free_object_table(mxtdata);
     kfree(mxtdata);
 
