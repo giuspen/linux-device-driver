@@ -1221,7 +1221,7 @@ static void mxt_recv_t100_multiple_touch_msg(struct mxt_data *mxtdata, u8 *messa
     }
     else
     {
-        dev_dbg(dev, "[%u] release\n", touch_id_slot);
+        dev_dbg(dev, "[%u] Release\n", touch_id_slot);
 
         /* close out slot */
         input_mt_report_slot_state(inputdev, 0, false);
@@ -2133,6 +2133,20 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
 static int mxt_input_open(struct input_dev *inputdev);
 static void mxt_input_close(struct input_dev *inputdev);
 
+static void mxt_unregister_input_device(struct mxt_data *mxtdata)
+{
+    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
+
+    if (mxtdata->inputdev)
+    {
+#ifdef INPUT_DEVICE_ALWAYS_OPEN
+        mxt_input_close(mxtdata->inputdev);
+#endif //INPUT_DEVICE_ALWAYS_OPEN
+
+        input_unregister_device(mxtdata->inputdev);
+    }
+}
+
 static void mxt_free_object_table(struct mxt_data *mxtdata)
 {
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
@@ -2664,7 +2678,6 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 {
     const struct mxt_platform_data *mxtplatform = mxtdata->mxtplatform;
     struct device *dev = &mxtdata->i2cclient->dev;
-    struct input_dev *inputdev;
     int ret_val;
     unsigned int mt_flags = 0;
     int i;
@@ -2703,46 +2716,49 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
     dev_info(dev, "Touchscreen size X%uY%u\n", mxtdata->t100_max_x, mxtdata->t100_max_y);
 
-    /* allocate memory for new managed input device (no need to free or unregister) */
-    inputdev = devm_input_allocate_device(dev);
-    if (!inputdev)
+    if (!mxtdata->inputdev)
     {
-        return -ENOMEM;
+        /* allocate memory for new managed input device (no need to free) */
+        mxtdata->inputdev = devm_input_allocate_device(dev);
+        if (!mxtdata->inputdev)
+        {
+            return -ENOMEM;
+        }
     }
 
     if (mxtdata->mxtplatform->input_name)
     {
-        inputdev->name = mxtdata->mxtplatform->input_name;
+        mxtdata->inputdev->name = mxtdata->mxtplatform->input_name;
     }
     else
     {
-        inputdev->name = "Solomon Systech maXTouch Touchscreen";
+        mxtdata->inputdev->name = "Solomon Systech maXTouch Touchscreen";
     }
 
-    inputdev->phys = mxtdata->phys;
-    inputdev->id.bustype = BUS_I2C;
-    inputdev->dev.parent = dev;
+    mxtdata->inputdev->phys = mxtdata->phys;
+    mxtdata->inputdev->id.bustype = BUS_I2C;
+    mxtdata->inputdev->dev.parent = dev;
 
 #ifndef INPUT_DEVICE_ALWAYS_OPEN
-    inputdev->open = mxt_input_open;
-    inputdev->close = mxt_input_close;
+    mxtdata->inputdev->open = mxt_input_open;
+    mxtdata->inputdev->close = mxt_input_close;
 #endif //INPUT_DEVICE_ALWAYS_OPEN
 
-    set_bit(EV_ABS, inputdev->evbit);
-    input_set_capability(inputdev, EV_KEY, BTN_TOUCH);
+    set_bit(EV_ABS, mxtdata->inputdev->evbit);
+    input_set_capability(mxtdata->inputdev, EV_KEY/*event type*/, BTN_TOUCH/*event code*/);
 
     /* For single touch */
-    input_set_abs_params(inputdev, ABS_X, 0, mxtdata->t100_max_x, 0, 0);
-    input_set_abs_params(inputdev, ABS_Y, 0, mxtdata->t100_max_y, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_X, 0, mxtdata->t100_max_x, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_Y, 0, mxtdata->t100_max_y, 0, 0);
     if (mxtdata->t100_aux_ampl_idx)
     {
-        input_set_abs_params(inputdev, ABS_PRESSURE, 0, 255, 0, 0);
+        input_set_abs_params(mxtdata->inputdev, ABS_PRESSURE, 0, 255, 0, 0);
     }
 
     /* If device has buttons we assume it is a touchpad */
     if (mxtplatform->t19_gpio_num_keys)
     {
-        mxt_input_device_set_up_as_touchpad(inputdev, mxtdata);
+        mxt_input_device_set_up_as_touchpad(mxtdata->inputdev, mxtdata);
         mt_flags |= INPUT_MT_POINTER;
     }
     else
@@ -2751,38 +2767,38 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
     }
 
     /* For multi touch */
-    ret_val = input_mt_init_slots(inputdev, mxtdata->t100_num_touchids, mt_flags);
+    ret_val = input_mt_init_slots(mxtdata->inputdev, mxtdata->t100_num_touchids, mt_flags);
     if (ret_val)
     {
         dev_err(dev, "Error %d initialising slots\n", ret_val);
         return ret_val;
     }
 
-    input_set_abs_params(inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
-    input_set_abs_params(inputdev, ABS_MT_DISTANCE, MXT_TOUCH_DISTANCE_ACTIVE_TOUCH, MXT_TOUCH_DISTANCE_HOVERING, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_MT_TOOL_TYPE, 0, MT_TOOL_MAX, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_MT_DISTANCE, MXT_TOUCH_DISTANCE_ACTIVE_TOUCH, MXT_TOUCH_DISTANCE_HOVERING, 0, 0);
 
-    input_set_abs_params(inputdev, ABS_MT_POSITION_X, 0, mxtdata->t100_max_x, 0, 0);
-    input_set_abs_params(inputdev, ABS_MT_POSITION_Y, 0, mxtdata->t100_max_y, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_MT_POSITION_X, 0, mxtdata->t100_max_x, 0, 0);
+    input_set_abs_params(mxtdata->inputdev, ABS_MT_POSITION_Y, 0, mxtdata->t100_max_y, 0, 0);
 
     if (mxtdata->t100_aux_area_idx)
     {
-        input_set_abs_params(inputdev, ABS_MT_TOUCH_MAJOR, 0, MXT_MAX_AREA, 0, 0);
+        input_set_abs_params(mxtdata->inputdev, ABS_MT_TOUCH_MAJOR, 0, MXT_MAX_AREA, 0, 0);
     }
 
     if (mxtdata->t100_aux_ampl_idx || mxtdata->t100_stylus_aux_pressure_idx)
     {
-        input_set_abs_params(inputdev, ABS_MT_PRESSURE, 0, 255, 0, 0);
+        input_set_abs_params(mxtdata->inputdev, ABS_MT_PRESSURE, 0, 255, 0, 0);
     }
 
     if (mxtdata->t100_aux_vect_idx)
     {
-        input_set_abs_params(inputdev, ABS_MT_ORIENTATION, 0, 255, 0, 0);
+        input_set_abs_params(mxtdata->inputdev, ABS_MT_ORIENTATION, 0, 255, 0, 0);
     }
 
     /* For T107 Active Stylus */
     if (mxtdata->t107_cfg_address)
     {
-        ret_val = mxt_input_device_set_up_active_stylus(inputdev, mxtdata);
+        ret_val = mxt_input_device_set_up_active_stylus(mxtdata->inputdev, mxtdata);
         if (ret_val)
         {
             dev_err(dev, "Failed to read T107 config\n");
@@ -2796,27 +2812,25 @@ static int mxt_input_device_initialize(struct mxt_data *mxtdata)
 
         for (i = 0; i < mxtdata->mxtplatform->t15_keyarray_num_keys; i++)
         {
-            input_set_capability(inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[i]);
+            input_set_capability(mxtdata->inputdev, EV_KEY, mxtdata->mxtplatform->t15_keyarray_keymap[i]);
         }
     }
 
     /* For double tap */
     if (mxtdata->t93_cfg_address)
     {
-        input_set_capability(inputdev, EV_KEY, KEY_WAKEUP);
+        input_set_capability(mxtdata->inputdev, EV_KEY, KEY_WAKEUP);
     }
 
-    input_set_drvdata(inputdev, mxtdata);
+    input_set_drvdata(mxtdata->inputdev, mxtdata);
 
     dev_dbg(dev, "input_register_device\n");
-    ret_val = input_register_device(inputdev);
+    ret_val = input_register_device(mxtdata->inputdev);
     if (ret_val)
     {
         dev_err(dev, "Error %d registering input device\n", ret_val);
         return ret_val;
     }
-
-    mxtdata->inputdev = inputdev;
 
 #ifdef INPUT_DEVICE_ALWAYS_OPEN
     mxt_input_open(mxtdata->inputdev);
@@ -3366,12 +3380,7 @@ static int mxt_enter_bootloader(struct mxt_data *mxtdata)
         mxtdata->in_bootloader = true;
         mxt_sysfs_debug_msg_remove(mxtdata);
         mxt_sysfs_mem_access_remove(mxtdata);
-#ifdef INPUT_DEVICE_ALWAYS_OPEN
-        if (mxtdata->inputdev)
-        {
-            mxt_input_close(mxtdata->inputdev);
-        }
-#endif //INPUT_DEVICE_ALWAYS_OPEN
+        mxt_unregister_input_device(mxtdata);
         mxt_free_object_table(mxtdata);
     }
 
@@ -3628,12 +3637,7 @@ static ssize_t mxt_devattr_update_cfg_store(struct device *dev,
 
     mxtdata->updating_config = true;
 
-#ifdef INPUT_DEVICE_ALWAYS_OPEN
-    if (mxtdata->inputdev)
-    {
-        mxt_input_close(mxtdata->inputdev);
-    }
-#endif //INPUT_DEVICE_ALWAYS_OPEN
+    mxt_unregister_input_device(mxtdata);
 
     if (mxtdata->suspended)
     {
@@ -4429,12 +4433,7 @@ static int mxt_remove(struct i2c_client *i2cclient)
     {
         regulator_put(mxtdata->reg_vdd);
     }
-#ifdef INPUT_DEVICE_ALWAYS_OPEN
-    if (mxtdata->inputdev)
-    {
-        mxt_input_close(mxtdata->inputdev);
-    }
-#endif //INPUT_DEVICE_ALWAYS_OPEN
+    mxt_unregister_input_device(mxtdata);
     mxt_free_object_table(mxtdata);
     kfree(mxtdata);
 
