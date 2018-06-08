@@ -239,6 +239,48 @@ enum t100_touch_type
 #define MXT_T93_CTRL_ENABLE  (1 << 0)
 #define MXT_T93_CTRL_RPTEN   (1 << 1)
 
+// opcodes
+#define SPI_WRITE_REQ    0x01
+#define SPI_WRITE_OK     0x81
+#define SPI_WRITE_FAIL   0x41
+#define SPI_READ_REQ     0x02
+#define SPI_READ_OK      0x82
+#define SPI_READ_FAIL    0x42
+#define SPI_INVALID_REQ  0x04
+#define SPI_INVALID_CRC  0x08
+
+#define SPI_APP_DATA_MAX_LEN  64
+#define SPI_APP_HEADER_LEN     6
+// header 6 bytes + Data[]
+// 0 opcode
+// 1 address LSB
+// 2 address MSB
+// 3 length LSB
+// 4 length MSB
+// 5 CRC
+// 6+ Data[]
+
+#define SPI_BOOTL_HEADER_LEN   2
+
+#define SPI_APP_BUF_SIZE  (SPI_APP_HEADER_LEN+SPI_APP_DATA_MAX_LEN)
+
+//static const u32 spi_mode32 = SPI_CPHA | SPI_CPOL;
+//static const u8 spi_bits_per_word = 8;
+static const u32 spi_app_max_speed_hz = 4000000; // 4 MHz
+static const u32 spi_bootl_max_speed_hz = 400000; // 400 KHz
+static u8 spi_tx_buf[SPI_APP_BUF_SIZE];
+static u8 spi_rx_buf[SPI_APP_BUF_SIZE];
+static u8 spi_tx_dummy_buf[SPI_APP_BUF_SIZE] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
 struct mxt_info
 {
     u8 family_id;
@@ -375,6 +417,48 @@ struct mxt_data
     /* Indicates whether device is updating configuration */
     bool updating_config;
 };
+
+static u8 get_crc8_iter(u8 crc, u8 data)
+{
+    static const u8 crcpoly = 0x8c;
+    u8 index = 8;
+    u8 fb;
+    do
+    {
+        fb = (crc ^ data) & 0x01;
+        data >>= 1;
+        crc >>= 1;
+        if (fb)
+        {
+            crc ^= crcpoly;
+        }
+    } while (--index);
+    return crc;
+}
+
+static u8 get_header_crc(u8 *p_msg)
+{
+    u8 calc_crc = 0;
+    int i = 0;
+    for (; i < SPI_APP_HEADER_LEN-1; i++)
+    {
+        calc_crc = get_crc8_iter(calc_crc, p_msg[i]);
+    }
+    return calc_crc;
+}
+
+static void spi_prepare_header(u8 *header,
+                               u8 opcode,
+                               u16 start_register,
+                               u16 count)
+{
+    header[0] = opcode;
+    header[1] = start_register & 0xff;
+    header[2] = start_register >> 8;
+    header[3] = count & 0xff;
+    header[4] = count >> 8;
+    header[5] = get_header_crc(header);
+}
 
 static size_t mxt_get_obj_size(const struct mxt_object *obj)
 {
@@ -581,13 +665,11 @@ static int __mxt_read_reg(struct spi_device *spidevice, u16 reg, u16 len, void *
     le_reg[1] = reg >> 8;
 
     /* Write register */
-    i2cmsgv[0].addr = spidevice->addr;
     i2cmsgv[0].flags = 0; // I2C_M_TEN not set, 7 bit address
     i2cmsgv[0].len = 2;
     i2cmsgv[0].buf = le_reg;
 
     /* Read data */
-    i2cmsgv[1].addr = spidevice->addr;
     i2cmsgv[1].flags = I2C_M_RD; // I2C_M_TEN not set, 7 bit address
     i2cmsgv[1].len = len;
     i2cmsgv[1].buf = val;
@@ -611,7 +693,7 @@ static int __mxt_read_reg(struct spi_device *spidevice, u16 reg, u16 len, void *
     return ret_val;
 }
 
-static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
+static int mxt_read_blks(struct spi_device *spidevice, u16 start, u16 count, u8 *buf)
 {
     u16 offset = 0;
     int ret_val;
@@ -621,7 +703,7 @@ static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf
     {
         size = min(MXT_MAX_BLOCK_WRITE, count - offset);
 
-        ret_val = __mxt_read_reg(mxtdata->spidevice,
+        ret_val = __mxt_read_reg(spidevice,
                                  start + offset,
                                  size,
                                  buf + offset);
@@ -692,7 +774,7 @@ static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = __mxt_read_reg(mxtdata->spidevice, off, count, buf);
+        ret_val = mxt_read_blks(mxtdata->spidevice, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -852,11 +934,6 @@ static int mxt_send_bootloader_unlock_cmd(struct mxt_data *mxtdata)
     dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
 
     return mxt_bootloader_write(mxtdata, buf, 2);
-}
-
-static int mxt_write_reg(struct spi_device *spidevice, u16 reg, u8 val)
-{
-    return __mxt_write_reg(spidevice, reg, 1, &val);
 }
 
 static struct mxt_object * mxt_get_object(struct mxt_data *mxtdata, u8 type)
@@ -1324,10 +1401,10 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
     }
 
     /* Process remaining messages if necessary */
-    ret_val = __mxt_read_reg(mxtdata->spidevice,
-                             mxtdata->t5_cfg_address,
-                             mxtdata->t5_msg_size * count,
-                             mxtdata->msg_buf);
+    ret_val = mxt_read_blks(mxtdata->spidevice,
+                            mxtdata->t5_cfg_address,
+                            mxtdata->t5_msg_size * count,
+                            mxtdata->msg_buf);
     if (ret_val)
     {
         dev_err(dev, "Failed to read %u messages (%d)\n", count, ret_val);
@@ -1359,10 +1436,10 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
     //dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
 
     /* Read T44 and T5 together */
-    ret_val = __mxt_read_reg(mxtdata->spidevice,
-                             mxtdata->t44_cfg_address,
-                             1 + mxtdata->t5_msg_size,
-                             mxtdata->msg_buf);
+    ret_val = mxt_read_blks(mxtdata->spidevice,
+                            mxtdata->t44_cfg_address,
+                            1 + mxtdata->t5_msg_size,
+                            mxtdata->msg_buf);
     if (ret_val)
     {
         dev_err(dev, "Failed to read T44 and T5 (%d)\n", ret_val);
@@ -1533,7 +1610,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     reg = mxtdata->t6_cfg_address + cmd_offset;
 
-    ret_val = mxt_write_reg(mxtdata->spidevice, reg, cmd_value);
+    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, cmd_value);
     if (ret_val)
     {
         return ret_val;
@@ -1547,7 +1624,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
     do
     {
         msleep(20);
-        ret_val = __mxt_read_reg(mxtdata->spidevice, reg, 1, &command_register);
+        ret_val = mxt_read_blks(mxtdata->spidevice, reg, 1, &command_register);
         if (ret_val)
         {
             return ret_val;
@@ -1673,9 +1750,9 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
 
     if (mxtdata->t18_cfg_address)
     {
-        ret_val = __mxt_read_reg(spidevice,
-                                 mxtdata->t18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
-                                 1, &val);
+        ret_val = mxt_read_blks(spidevice,
+                                mxtdata->t18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
+                                1, &val);
         if (ret_val)
         {
             return ret_val;
@@ -2254,7 +2331,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     int ret_val;
     size_t size;
     void *mxtinfo, *buf;
-    uint8_t num_objects;
+    u8 num_objects;
     u32 calculated_crc;
     u8 *crc_ptr;
 
@@ -2275,7 +2352,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     }
 
     /* Read information block, starting at address 0 */
-    ret_val = __mxt_read_reg(spidevice, 0, size, mxtinfo);
+    ret_val = mxt_read_blks(spidevice, 0, size, mxtinfo);
     if (ret_val)
     {
         kfree(mxtinfo);
@@ -2293,7 +2370,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     }
 
     /* Read rest of info block */
-    ret_val = mxt_read_blks(mxtdata,
+    ret_val = mxt_read_blks(spidevice,
                             MXT_OBJECT_START,
                             size - MXT_OBJECT_START,
                             buf + MXT_OBJECT_START);
@@ -2475,7 +2552,7 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = __mxt_read_reg(spidevice, object->start_address, 1, &ctrl_byte);
+    ret_val = mxt_read_blks(spidevice, object->start_address, 1, &ctrl_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2487,9 +2564,9 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = __mxt_read_reg(spidevice,
-                             object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
-                             1, &styaux_byte);
+    ret_val = mxt_read_blks(spidevice,
+                            object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
+                            1, &styaux_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2538,9 +2615,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     }
 
     /* read touchscreen dimensions */
-    ret_val = __mxt_read_reg(spidevice,
-                             object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
-                             2, range_x);
+    ret_val = mxt_read_blks(spidevice,
+                            object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
+                            2, range_x);
     if (ret_val)
     {
         return ret_val;
@@ -2548,9 +2625,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_max_x = range_x[0] | range_x[1] << 8; // little endian 16
 
-    ret_val = __mxt_read_reg(spidevice,
-                             object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
-                             2, range_y);
+    ret_val = mxt_read_blks(spidevice,
+                            object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
+                            2, range_y);
     if (ret_val)
     {
         return ret_val;
@@ -2559,9 +2636,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     mxtdata->t100_max_y = range_y[0] | range_y[1] << 8; // little endian 16
 
     /* read orientation config */
-    ret_val =  __mxt_read_reg(spidevice,
-                              object->start_address + MXT_T100_CFG_CFG1_OFFSET,
-                              1, &cfg1_byte);
+    ret_val =  mxt_read_blks(spidevice,
+                             object->start_address + MXT_T100_CFG_CFG1_OFFSET,
+                             1, &cfg1_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2569,9 +2646,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_xy_switch = cfg1_byte & MXT_T100_CFG_CFG1_SWITCHXY_BIT;
 
-    ret_val =  __mxt_read_reg(spidevice,
-                              object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
-                              1, &tchaux_byte);
+    ret_val =  mxt_read_blks(spidevice,
+                             object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
+                             1, &tchaux_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2816,7 +2893,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
 
     reg = mxtdata->t93_cfg_address + cmd_offset;
-    ret_val = __mxt_read_reg(mxtdata->spidevice, reg, 1, &command_register);
+    ret_val = mxt_read_blks(mxtdata->spidevice, reg, 1, &command_register);
     if (ret_val)
     {
         return ret_val;
@@ -2830,7 +2907,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     {
         command_register &= ~(MXT_T93_CTRL_ENABLE|MXT_T93_CTRL_RPTEN);
     }
-    ret_val = mxt_write_reg(mxtdata->spidevice, reg, command_register);
+    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -2851,7 +2928,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     reg = mxtdata->t100_cfg_address + cmd_offset;
     command_register = type;
 
-    ret_val = mxt_write_reg(mxtdata->spidevice, reg, command_register);
+    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -3016,10 +3093,10 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
 
     for (retry = 0; retry < 2; retry++)
     {
-        ret_val = __mxt_read_reg(mxtdata->spidevice,
-                                 mxtdata->t7_cfg_address,
-                                 sizeof(mxtdata->t7_powercfg),
-                                 &mxtdata->t7_powercfg);
+        ret_val = mxt_read_blks(mxtdata->spidevice,
+                                mxtdata->t7_cfg_address,
+                                sizeof(mxtdata->t7_powercfg),
+                                &mxtdata->t7_powercfg);
         if (ret_val)
         {
             return ret_val;
@@ -3189,7 +3266,7 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
                     u16 size = mxt_get_obj_size(object);
                     u16 addr = object->start_address + j * size;
 
-                    ret_val = mxt_read_blks(mxtdata, addr, size, obuf);
+                    ret_val = mxt_read_blks(mxtdata->spidevice, addr, size, obuf);
                     if (ret_val)
                     {
                         goto done;
@@ -4118,21 +4195,6 @@ static const struct mxt_platform_data *mxt_platform_data_get_from_acpi(struct sp
     const struct dmi_system_id *system_id;
     const struct mxt_acpi_platform_data *acpi_pdata;
 
-    /*
-     * Ignore ACPI devices representing bootloader mode.
-     *
-     * This is a bit of a hack: Google Chromebook BIOS creates ACPI
-     * devices for both application and bootloader modes, but we are
-     * interested in application mode only (if device is in bootloader
-     * mode we'll end up switching into application anyway). So far
-     * application mode addresses were all above 0x40, so we'll use it
-     * as a threshold.
-     */
-    if (spidevice->addr < 0x40)
-    {
-        return ERR_PTR(-ENXIO);
-    }
-
     adev = ACPI_COMPANION(&spidevice->dev);
     if (!adev)
     {
@@ -4263,6 +4325,14 @@ static int mxt_probe(struct spi_device *spidevice)
 
     dev_dbg(&spidevice->dev, "%s >>>\n", __func__);
 
+    if ( (spidevice->bits_per_word && spidevice->bits_per_word != 8) ||
+         !(spidevice->mode & SPI_CPHA) ||
+         !(spidevice->mode & SPI_CPOL) )
+    {
+        dev_err(&spidevice->dev, "unexpected spi device setup\n");
+        return -EINVAL;
+    }
+
     mxtplatform = mxt_platform_data_get(spidevice);
     if (IS_ERR(mxtplatform))
     {
@@ -4274,7 +4344,7 @@ static int mxt_probe(struct spi_device *spidevice)
     {
         return -ENOMEM;
     }
-    snprintf(mxtdata->phys, sizeof(mxtdata->phys), "spi-%d-%u/input0", spidevice->master->bus_num, spidevice->master->num_chipselect);
+    snprintf(mxtdata->phys, sizeof(mxtdata->phys), "spi-%d/input0", spidevice->master->bus_num);
     dev_info(&spidevice->dev, "%s %s\n", __func__, mxtdata->phys);
 
     mxtdata->spidevice = spidevice;
