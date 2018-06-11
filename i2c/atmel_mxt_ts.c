@@ -564,31 +564,45 @@ static int mxt_check_mem_access_params(struct mxt_data *mxtdata,
         *count = mxtdata->mem_size - off;
     }
 
-    if (*count > MXT_MAX_BLOCK_WRITE)
-    {
-        *count = MXT_MAX_BLOCK_WRITE;
-    }
-
     return 0;
 }
 
-static int __mxt_read_reg(struct i2c_client *i2cclient, u16 reg, u16 len, void *val)
+static u8 mxt_read_chg(struct mxt_data *mxtdata)
+{
+    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_chg_irq);
+    return ret_val;
+}
+
+static int mxt_wait_for_chg(struct mxt_data *mxtdata)
+{
+    int timeout_counter = 2500; // 50 msec
+
+    while (0 != mxt_read_chg(mxtdata) && timeout_counter > 0)
+    {
+        timeout_counter--;
+        udelay(20);
+    }
+
+    return timeout_counter > 0 ? 0 : -1;
+}
+
+static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 len, u8 *val)
 {
     struct i2c_msg i2cmsgv[2];
     u8 le_reg[2];
     int ret_val, retry;
 
-    le_reg[0] = reg & 0xff;
-    le_reg[1] = reg >> 8;
+    le_reg[0] = start_register & 0xff;
+    le_reg[1] = start_register >> 8;
 
     /* Write register */
-    i2cmsgv[0].addr = i2cclient->addr;
+    i2cmsgv[0].addr = mxtdata->i2cclient->addr;
     i2cmsgv[0].flags = 0; // I2C_M_TEN not set, 7 bit address
     i2cmsgv[0].len = 2;
     i2cmsgv[0].buf = le_reg;
 
     /* Read data */
-    i2cmsgv[1].addr = i2cclient->addr;
+    i2cmsgv[1].addr = mxtdata->i2cclient->addr;
     i2cmsgv[1].flags = I2C_M_RD; // I2C_M_TEN not set, 7 bit address
     i2cmsgv[1].len = len;
     i2cmsgv[1].buf = val;
@@ -597,16 +611,16 @@ static int __mxt_read_reg(struct i2c_client *i2cclient, u16 reg, u16 len, void *
     {
         if (retry > 0)
         {
-            dev_dbg(&i2cclient->dev, "%s: retry %d\n", __func__, retry);
+            dev_dbg(&mxtdata->i2cclient->dev, "%s: retry %d\n", __func__, retry);
             msleep(MXT_WAKEUP_TIME);
         }
-        ret_val = i2c_transfer(i2cclient->adapter, i2cmsgv, 2);
+        ret_val = i2c_transfer(mxtdata->i2cclient->adapter, i2cmsgv, 2);
         if (2 == ret_val)
         {
             ret_val = 0;
             break;
         }
-        dev_err(&i2cclient->dev, "%s: i2c_transfer ret_val %d\n", __func__, ret_val);
+        dev_err(&mxtdata->i2cclient->dev, "%s: i2c_transfer ret_val %d\n", __func__, ret_val);
         ret_val = ret_val < 0 ? ret_val : -EIO;
     }
     return ret_val;
@@ -622,7 +636,7 @@ static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf
     {
         size = min(MXT_MAX_BLOCK_WRITE, count - offset);
 
-        ret_val = __mxt_read_reg(mxtdata->i2cclient,
+        ret_val = __mxt_read_reg(mxtdata,
                                  start + offset,
                                  size,
                                  buf + offset);
@@ -637,7 +651,7 @@ static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf
     return 0;
 }
 
-static int __mxt_write_reg(struct i2c_client *i2cclient, u16 reg, u16 len, const void *val)
+static int __mxt_write_reg(struct mxt_data *mxtdata, u16 start_register, u16 len, const u8 *val)
 {
     u8 *buf;
     size_t count;
@@ -650,28 +664,53 @@ static int __mxt_write_reg(struct i2c_client *i2cclient, u16 reg, u16 len, const
         return -ENOMEM;
     }
 
-    buf[0] = reg & 0xff;
-    buf[1] = reg >> 8;
+    buf[0] = start_register & 0xff;
+    buf[1] = start_register >> 8;
     memcpy(&buf[2], val, len);
 
     for (retry = 0; retry < 2; retry++)
     {
         if (retry > 0)
         {
-            dev_dbg(&i2cclient->dev, "%s: retry %d\n", __func__, retry);
+            dev_dbg(&mxtdata->i2cclient->dev, "%s: retry %d\n", __func__, retry);
             msleep(MXT_WAKEUP_TIME);
         }
-        ret_val = i2c_master_send(i2cclient, buf, count);
+        ret_val = i2c_master_send(mxtdata->i2cclient, buf, count);
         if (ret_val == count)
         {
             ret_val = 0;
             break;
         }
-        dev_err(&i2cclient->dev, "%s: i2c_master_send ret_val %d\n", __func__, ret_val);
+        dev_err(&mxtdata->i2cclient->dev, "%s: i2c_master_send ret_val %d\n", __func__, ret_val);
         ret_val = ret_val < 0 ? ret_val : -EIO;
     }
     kfree(buf);
     return ret_val;
+}
+
+static int mxt_write_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
+{
+    u16 offset = 0;
+    int ret_val;
+    u16 size;
+
+    while (offset < count)
+    {
+        size = min(MXT_MAX_BLOCK_WRITE, count - offset);
+
+        ret_val = __mxt_write_reg(mxtdata,
+                                  start + offset,
+                                  size,
+                                  buf + offset);
+        if (ret_val)
+        {
+            return ret_val;
+        }
+
+        offset += size;
+    }
+
+    return 0;
 }
 
 static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
@@ -693,7 +732,7 @@ static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = __mxt_read_reg(mxtdata->i2cclient, off, count, buf);
+        ret_val = mxt_read_blks(mxtdata, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -718,7 +757,7 @@ static ssize_t mxt_sysfs_mem_access_write(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = __mxt_write_reg(mxtdata->i2cclient, off, count, buf);
+        ret_val = mxt_write_blks(mxtdata, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -899,11 +938,6 @@ static int mxt_send_bootloader_unlock_cmd(struct mxt_data *mxtdata)
     return mxt_bootloader_write(mxtdata, buf, 2);
 }
 
-static int mxt_write_reg(struct i2c_client *i2cclient, u16 reg, u8 val)
-{
-    return __mxt_write_reg(i2cclient, reg, 1, &val);
-}
-
 static struct mxt_object * mxt_get_object(struct mxt_data *mxtdata, u8 type)
 {
     struct mxt_object *object;
@@ -1034,7 +1068,6 @@ static void mxt_recv_t93_touch_sequence_msg(struct mxt_data *mxtdata, u8 *msg)
     input_sync(mxtdata->inputdev);
 }
 
-#ifdef DEBUG
 static const char *get_t100_touch_type_str(u8 touch_type)
 {
     switch (touch_type)
@@ -1058,7 +1091,6 @@ static const char *get_t100_touch_type_str(u8 touch_type)
     }
     return "???";
 }
-#endif
 
 static void mxt_recv_t100_multiple_touch_msg(struct mxt_data *mxtdata, u8 *message)
 {
@@ -1369,10 +1401,10 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
     }
 
     /* Process remaining messages if necessary */
-    ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                             mxtdata->t5_cfg_address,
-                             mxtdata->t5_msg_size * count,
-                             mxtdata->msg_buf);
+    ret_val = mxt_read_blks(mxtdata,
+                            mxtdata->t5_cfg_address,
+                            mxtdata->t5_msg_size * count,
+                            mxtdata->msg_buf);
     if (ret_val)
     {
         dev_err(dev, "Failed to read %u messages (%d)\n", count, ret_val);
@@ -1404,10 +1436,10 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
     //dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     /* Read T44 and T5 together */
-    ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                             mxtdata->t44_cfg_address,
-                             1 + mxtdata->t5_msg_size,
-                             mxtdata->msg_buf);
+    ret_val = mxt_read_blks(mxtdata,
+                            mxtdata->t44_cfg_address,
+                            1 + mxtdata->t5_msg_size,
+                            mxtdata->msg_buf);
     if (ret_val)
     {
         dev_err(dev, "Failed to read T44 and T5 (%d)\n", ret_val);
@@ -1419,7 +1451,7 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
 
     /*
      * This condition may be caused by the CHG line being configured in
-     * Mode 0. It results in unnecessary I2C operations but it is benign.
+     * Mode 0. It results in unnecessary operations but it is benign.
      */
     if (0 == count)
     {
@@ -1578,7 +1610,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     reg = mxtdata->t6_cfg_address + cmd_offset;
 
-    ret_val = mxt_write_reg(mxtdata->i2cclient, reg, cmd_value);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &cmd_value);
     if (ret_val)
     {
         return ret_val;
@@ -1592,7 +1624,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
     do
     {
         msleep(20);
-        ret_val = __mxt_read_reg(mxtdata->i2cclient, reg, 1, &command_register);
+        ret_val = mxt_read_blks(mxtdata, reg, 1, &command_register);
         if (ret_val)
         {
             return ret_val;
@@ -1707,9 +1739,8 @@ static u32 mxt_calculate_crc(u8 *base, off_t start_off, off_t end_off)
 
 static int mxt_check_retrigen(struct mxt_data *mxtdata)
 {
-    struct i2c_client *i2cclient = mxtdata->i2cclient;
     int ret_val;
-    int val;
+    u8 val;
 
     if (irq_get_trigger_type(mxtdata->chg_irq) & IRQF_TRIGGER_LOW)
     {
@@ -1718,9 +1749,9 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
 
     if (mxtdata->t18_cfg_address)
     {
-        ret_val = __mxt_read_reg(i2cclient,
-                                 mxtdata->t18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
-                                 1, &val);
+        ret_val = mxt_read_blks(mxtdata,
+                                mxtdata->t18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
+                                1, &val);
         if (ret_val)
         {
             return ret_val;
@@ -1732,7 +1763,7 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
         }
     }
 
-    dev_warn(&i2cclient->dev, "Enabling RETRIGEN workaround\n");
+    dev_warn(&mxtdata->i2cclient->dev, "Enabling RETRIGEN workaround\n");
     mxtdata->use_retrigen_workaround = true;
     return 0;
 }
@@ -1841,39 +1872,6 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
                 return -EINVAL;
             }
         }
-    }
-
-    return 0;
-}
-
-static int mxt_upload_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
-{
-    unsigned int byte_offset = 0;
-    int ret_val;
-
-    dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
-
-    /* Write configuration as blocks */
-    while (byte_offset < cfg->mem_size)
-    {
-        unsigned int size = cfg->mem_size - byte_offset;
-
-        if (size > MXT_MAX_BLOCK_WRITE)
-        {
-            size = MXT_MAX_BLOCK_WRITE;
-        }
-
-        ret_val = __mxt_write_reg(mxtdata->i2cclient,
-                                  cfg->start_ofs + byte_offset,
-                                  size,
-                                  cfg->mem + byte_offset);
-        if (ret_val)
-        {
-            dev_err(&mxtdata->i2cclient->dev, "Config write error, ret_val=%d\n", ret_val);
-            return ret_val;
-        }
-
-        byte_offset += size;
     }
 
     return 0;
@@ -2050,7 +2048,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
         }
     }
 
-    ret_val = mxt_upload_cfg_mem(mxtdata, &cfg);
+    ret_val = mxt_write_blks(mxtdata, cfg.start_ofs, cfg.mem_size, cfg.mem);
     if (ret_val)
     {
         goto release_mem;
@@ -2299,7 +2297,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     int ret_val;
     size_t size;
     void *mxtinfo, *buf;
-    uint8_t num_objects;
+    u8 num_objects;
     u32 calculated_crc;
     u8 *crc_ptr;
 
@@ -2320,7 +2318,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     }
 
     /* Read information block, starting at address 0 */
-    ret_val = __mxt_read_reg(i2cclient, 0, size, mxtinfo);
+    ret_val = mxt_read_blks(mxtdata, 0, size, mxtinfo);
     if (ret_val)
     {
         kfree(mxtinfo);
@@ -2354,7 +2352,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     calculated_crc = mxt_calculate_crc(buf, 0, size - MXT_INFO_CHECKSUM_SIZE);
 
     /*
-     * CRC mismatch can be caused by data corruption due to I2C comms
+     * CRC mismatch can be caused by data corruption due to comms
      * issue or else device is not using Object Based Protocol (eg i2c-hid)
      */
     if ((mxtdata->info_crc == 0) || (mxtdata->info_crc != calculated_crc))
@@ -2520,7 +2518,7 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = __mxt_read_reg(i2cclient, object->start_address, 1, &ctrl_byte);
+    ret_val = mxt_read_blks(mxtdata, object->start_address, 1, &ctrl_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2532,9 +2530,9 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
-                             1, &styaux_byte);
+    ret_val = mxt_read_blks(mxtdata,
+                            object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
+                            1, &styaux_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2583,9 +2581,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     }
 
     /* read touchscreen dimensions */
-    ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
-                             2, range_x);
+    ret_val = mxt_read_blks(mxtdata,
+                            object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
+                            2, range_x);
     if (ret_val)
     {
         return ret_val;
@@ -2593,9 +2591,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_max_x = range_x[0] | range_x[1] << 8; // little endian 16
 
-    ret_val = __mxt_read_reg(i2cclient,
-                             object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
-                             2, range_y);
+    ret_val = mxt_read_blks(mxtdata,
+                            object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
+                            2, range_y);
     if (ret_val)
     {
         return ret_val;
@@ -2604,9 +2602,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     mxtdata->t100_max_y = range_y[0] | range_y[1] << 8; // little endian 16
 
     /* read orientation config */
-    ret_val =  __mxt_read_reg(i2cclient,
-                              object->start_address + MXT_T100_CFG_CFG1_OFFSET,
-                              1, &cfg1_byte);
+    ret_val =  mxt_read_blks(mxtdata,
+                             object->start_address + MXT_T100_CFG_CFG1_OFFSET,
+                             1, &cfg1_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2614,9 +2612,9 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_xy_switch = cfg1_byte & MXT_T100_CFG_CFG1_SWITCHXY_BIT;
 
-    ret_val =  __mxt_read_reg(i2cclient,
-                              object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
-                              1, &tchaux_byte);
+    ret_val =  mxt_read_blks(mxtdata,
+                             object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
+                             1, &tchaux_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2861,7 +2859,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     dev_dbg(&mxtdata->i2cclient->dev, "%s >\n", __func__);
 
     reg = mxtdata->t93_cfg_address + cmd_offset;
-    ret_val = __mxt_read_reg(mxtdata->i2cclient, reg, 1, &command_register);
+    ret_val = mxt_read_blks(mxtdata, reg, 1, &command_register);
     if (ret_val)
     {
         return ret_val;
@@ -2875,7 +2873,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     {
         command_register &= ~(MXT_T93_CTRL_ENABLE|MXT_T93_CTRL_RPTEN);
     }
-    ret_val = mxt_write_reg(mxtdata->i2cclient, reg, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &command_register);
 
     if (ret_val)
     {
@@ -2896,7 +2894,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     reg = mxtdata->t100_cfg_address + cmd_offset;
     command_register = type;
 
-    ret_val = mxt_write_reg(mxtdata->i2cclient, reg, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &command_register);
 
     if (ret_val)
     {
@@ -3039,10 +3037,10 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
         new_config = &mxtdata->t7_powercfg;
     }
 
-    ret_val = __mxt_write_reg(mxtdata->i2cclient,
-                              mxtdata->t7_cfg_address,
-                              sizeof(mxtdata->t7_powercfg),
-                              new_config);
+    ret_val = mxt_write_blks(mxtdata,
+                             mxtdata->t7_cfg_address,
+                             sizeof(mxtdata->t7_powercfg),
+                             (u8*)new_config);
     if (0 == ret_val)
     {
         dev_info(dev, "Set T7 ACTV:%d IDLE:%d\n", new_config->active, new_config->idle);
@@ -3061,10 +3059,10 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
 
     for (retry = 0; retry < 2; retry++)
     {
-        ret_val = __mxt_read_reg(mxtdata->i2cclient,
-                                 mxtdata->t7_cfg_address,
-                                 sizeof(mxtdata->t7_powercfg),
-                                 &mxtdata->t7_powercfg);
+        ret_val = mxt_read_blks(mxtdata,
+                                mxtdata->t7_cfg_address,
+                                sizeof(mxtdata->t7_powercfg),
+                                (u8*)&mxtdata->t7_powercfg);
         if (ret_val)
         {
             return ret_val;
@@ -3251,25 +3249,6 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
 done:
     kfree(obuf);
     return ret_val ?: count;
-}
-
-static u8 mxt_read_chg(struct mxt_data *mxtdata)
-{
-    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_chg_irq);
-    return ret_val;
-}
-
-static int mxt_wait_for_chg(struct mxt_data *mxtdata)
-{
-    int timeout_counter = 2500; // 50 msec
-
-    while (0 != mxt_read_chg(mxtdata) && timeout_counter > 0)
-    {
-        timeout_counter--;
-        udelay(20);
-    }
-
-    return timeout_counter > 0 ? 0 : -1;
 }
 
 static int mxt_check_bootloader(struct mxt_data *mxtdata, unsigned int expected_next_state)
