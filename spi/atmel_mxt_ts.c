@@ -231,8 +231,6 @@ enum t100_touch_type
 
 #define DEBUG_MSG_MAX      200
 
-#define MXT_MAX_BLOCK_WRITE   255
-
 #define MXT_T93_ENABLE      1
 #define MXT_T93_DISABLE     2
 
@@ -647,11 +645,6 @@ static int mxt_check_mem_access_params(struct mxt_data *mxtdata,
         *count = mxtdata->mem_size - off;
     }
 
-    if (*count > MXT_MAX_BLOCK_WRITE)
-    {
-        *count = MXT_MAX_BLOCK_WRITE;
-    }
-
     return 0;
 }
 
@@ -701,7 +694,7 @@ static int mxt_read_blks(struct spi_device *spidevice, u16 start, u16 count, u8 
 
     while (offset < count)
     {
-        size = min(MXT_MAX_BLOCK_WRITE, count - offset);
+        size = min(SPI_APP_DATA_MAX_LEN, count - offset);
 
         ret_val = __mxt_read_reg(spidevice,
                                  start + offset,
@@ -753,6 +746,31 @@ static int __mxt_write_reg(struct spi_device *spidevice, u16 reg, u16 len, const
     }
     kfree(buf);
     return ret_val;
+}
+
+static int mxt_write_blks(struct spi_device *spidevice, u16 start, u16 count, u8 *buf)
+{
+    u16 offset = 0;
+    int ret_val;
+    u16 size;
+
+    while (offset < count)
+    {
+        size = min(SPI_APP_DATA_MAX_LEN, count - offset);
+
+        ret_val = __mxt_write_reg(spidevice,
+                                  start + offset,
+                                  size,
+                                  buf + offset);
+        if (ret_val)
+        {
+            return ret_val;
+        }
+
+        offset += size;
+    }
+
+    return 0;
 }
 
 static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
@@ -1878,39 +1896,6 @@ static int mxt_prepare_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
     return 0;
 }
 
-static int mxt_upload_cfg_mem(struct mxt_data *mxtdata, struct mxt_cfg *cfg)
-{
-    unsigned int byte_offset = 0;
-    int ret_val;
-
-    dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
-
-    /* Write configuration as blocks */
-    while (byte_offset < cfg->mem_size)
-    {
-        unsigned int size = cfg->mem_size - byte_offset;
-
-        if (size > MXT_MAX_BLOCK_WRITE)
-        {
-            size = MXT_MAX_BLOCK_WRITE;
-        }
-
-        ret_val = __mxt_write_reg(mxtdata->spidevice,
-                                  cfg->start_ofs + byte_offset,
-                                  size,
-                                  cfg->mem + byte_offset);
-        if (ret_val)
-        {
-            dev_err(&mxtdata->spidevice->dev, "Config write error, ret_val=%d\n", ret_val);
-            return ret_val;
-        }
-
-        byte_offset += size;
-    }
-
-    return 0;
-}
-
 static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata);
 
 /*
@@ -2082,7 +2067,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
         }
     }
 
-    ret_val = mxt_upload_cfg_mem(mxtdata, &cfg);
+    ret_val = mxt_write_blks(mxtdata->spidevice, cfg.start_ofs, cfg.mem_size, cfg.mem);
     if (ret_val)
     {
         goto release_mem;
