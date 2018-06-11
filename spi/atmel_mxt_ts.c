@@ -689,7 +689,7 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 coun
         /* WRITE SPI_READ_REQ */
         spi_prepare_header(spi_tx_buf, SPI_READ_REQ, start_register, count);
         spi_message_init(&spimsg[0]);
-        memset(&spitr, 0,  sizeof(spitr));
+        memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_buf;
         spitr.rx_buf = spi_rx_buf;
         spitr.len = SPI_APP_HEADER_LEN;
@@ -708,7 +708,7 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 coun
 
         /* READ SPI_READ_OK */
         spi_message_init(&spimsg[1]);
-        memset(&spitr, 0,  sizeof(spitr));
+        memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_dummy_buf;
         spitr.rx_buf = spi_rx_buf;
         spitr.len = SPI_APP_HEADER_LEN + count;
@@ -789,7 +789,7 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const v
         spi_prepare_header(spi_tx_buf, SPI_WRITE_REQ, address_iter, count);
         memcpy(spi_tx_buf + SPI_APP_HEADER_LEN, val, count);
         spi_message_init(&spimsg[0]);
-        memset(&spitr, 0,  sizeof(spitr));
+        memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_buf;
         spitr.rx_buf = spi_rx_buf;
         spitr.len = SPI_APP_HEADER_LEN + count;
@@ -808,7 +808,7 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const v
 
         /* READ SPI_WRITE_OK */
         spi_message_init(&spimsg[1]);
-        memset(&spitr, 0,  sizeof(spitr));
+        memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_dummy_buf;
         spitr.rx_buf = spi_rx_buf;
         spitr.len = SPI_APP_HEADER_LEN;
@@ -942,12 +942,24 @@ static int mxt_bootloader_read(struct mxt_data *mxtdata,
                                u8 *val,
                                unsigned int count)
 {
-    int ret_val, retry;
-    struct i2c_msg i2cmsg;
+    u8 retry = 0;
+    int ret_val;
+    struct spi_message  spimsg;
+    struct spi_transfer spitr[2];
 
-    i2cmsg.flags = I2C_M_RD; // I2C_M_TEN not set, 7 bit address
-    i2cmsg.len = count;
-    i2cmsg.buf = val;
+    /* The bootloader is checking the LSBit of the first byte of SPI_BOOTL_HEADER_LEN,
+     * if found HIGH, assumes it's a READ, otherwise a WRITE.
+     * Our dummy buffer fits the purpose because it's all composed by 0xff */
+    spi_message_init(&spimsg);
+    memset(spitr, 0, 2*sizeof(struct spi_transfer));
+
+    spitr[0].tx_buf = spi_tx_dummy_buf;
+    spitr[0].len = 2;
+    spi_message_add_tail(&spitr[0], &spimsg);
+
+    spitr[1].rx_buf = val;
+    spitr[1].len = count;
+    spi_message_add_tail(&spitr[1], &spimsg);
 
     for (retry = 0; retry < 2; retry++)
     {
@@ -956,14 +968,13 @@ static int mxt_bootloader_read(struct mxt_data *mxtdata,
             dev_err(&mxtdata->spidevice->dev, "%s: retry %d\n", __func__, retry);
             msleep(30);
         }
-        ret_val = i2c_transfer(mxtdata->spidevice->adapter, &i2cmsg, 1);
-        if (1 == ret_val)
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg);
+        if (ret_val >= 0)
         {
             ret_val = 0;
             break;
         }
-        dev_err(&mxtdata->spidevice->dev, "%s: i2c_transfer ret_val %d\n", __func__, ret_val);
-        ret_val = ret_val < 0 ? ret_val : -EIO;
+        dev_err(&mxtdata->spidevice->dev, "Error reading from spi (%d)", ret_val);
     }
     return ret_val;
 }
@@ -972,12 +983,25 @@ static int mxt_bootloader_write(struct mxt_data *mxtdata,
                                 const u8 * const val,
                                 unsigned int count)
 {
-    int ret_val, retry;
-    struct i2c_msg i2cmsg;
+    u8 retry = 0;
+    int ret_val;
+    struct spi_message  spimsg;
+    struct spi_transfer spitr[2];
+    u8 header_write[2] = {0, 0};
 
-    i2cmsg.flags = 0; // I2C_M_TEN not set, 7 bit address
-    i2cmsg.len = count;
-    i2cmsg.buf = (u8 *)val;
+    /* The bootloader is checking the LSBit of the first byte of SPI_BOOTL_HEADER_LEN,
+     * if found HIGH, assumes it's a READ, otherwise a WRITE.
+     * Our header_write is all composed by 0x00 */
+    spi_message_init(&spimsg);
+    memset(spitr, 0, 2*sizeof(struct spi_transfer));
+
+    spitr[0].tx_buf = header_write;
+    spitr[0].len = 2;
+    spi_message_add_tail(&spitr[0], &spimsg);
+
+    spitr[1].tx_buf = val;
+    spitr[1].len = count;
+    spi_message_add_tail(&spitr[1], &spimsg);
 
     for (retry = 0; retry < 2; retry++)
     {
@@ -986,14 +1010,13 @@ static int mxt_bootloader_write(struct mxt_data *mxtdata,
             dev_err(&mxtdata->spidevice->dev, "%s: retry %d\n", __func__, retry);
             msleep(30);
         }
-        ret_val = i2c_transfer(mxtdata->spidevice->adapter, &i2cmsg, 1);
-        if (1 == ret_val)
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg);
+        if (ret_val >= 0)
         {
             ret_val = 0;
             break;
         }
-        dev_err(&mxtdata->spidevice->dev, "%s: i2c_transfer ret_val %d\n", __func__, ret_val);
-        ret_val = ret_val < 0 ? ret_val : -EIO;
+        dev_err(&mxtdata->spidevice->dev, "Error writing to spi (%d)", ret_val);
     }
     return ret_val;
 }
