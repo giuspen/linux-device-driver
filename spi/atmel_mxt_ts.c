@@ -648,45 +648,100 @@ static int mxt_check_mem_access_params(struct mxt_data *mxtdata,
     return 0;
 }
 
-static int __mxt_read_reg(struct spi_device *spidevice, u16 reg, u16 len, void *val)
+static u8 mxt_read_chg(struct mxt_data *mxtdata)
 {
-    struct i2c_msg i2cmsgv[2];
-    u8 le_reg[2];
-    int ret_val, retry;
-
-    le_reg[0] = reg & 0xff;
-    le_reg[1] = reg >> 8;
-
-    /* Write register */
-    i2cmsgv[0].flags = 0; // I2C_M_TEN not set, 7 bit address
-    i2cmsgv[0].len = 2;
-    i2cmsgv[0].buf = le_reg;
-
-    /* Read data */
-    i2cmsgv[1].flags = I2C_M_RD; // I2C_M_TEN not set, 7 bit address
-    i2cmsgv[1].len = len;
-    i2cmsgv[1].buf = val;
-
-    for (retry = 0; retry < 2; retry++)
-    {
-        if (retry > 0)
-        {
-            dev_dbg(&spidevice->dev, "%s: retry %d\n", __func__, retry);
-            msleep(MXT_WAKEUP_TIME);
-        }
-        ret_val = i2c_transfer(spidevice->adapter, i2cmsgv, 2);
-        if (2 == ret_val)
-        {
-            ret_val = 0;
-            break;
-        }
-        dev_err(&spidevice->dev, "%s: i2c_transfer ret_val %d\n", __func__, ret_val);
-        ret_val = ret_val < 0 ? ret_val : -EIO;
-    }
+    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_chg_irq);
     return ret_val;
 }
 
-static int mxt_read_blks(struct spi_device *spidevice, u16 start, u16 count, u8 *buf)
+static int mxt_wait_for_chg(struct mxt_data *mxtdata)
+{
+    int timeout_counter = 2500; // 50 msec
+
+    while (0 != mxt_read_chg(mxtdata) && timeout_counter > 0)
+    {
+        timeout_counter--;
+        udelay(20);
+    }
+
+    return timeout_counter > 0 ? 0 : -1;
+}
+
+static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 count, void *val)
+{
+    u8 attempt = 0;
+    int ret_val;
+    struct spi_message  spimsg[2];
+    struct spi_transfer spitr;
+    do
+    {
+        attempt++;
+        if (attempt > 1)
+        {
+            if (attempt > 3)
+            {
+                dev_err(&mxtdata->spidevice->dev, "Too many Retries\n");
+                return -EIO;
+            }
+            dev_warn(&mxtdata->spidevice->dev, "Retry %d after CRC fail\n", attempt-1);
+            msleep(MXT_WAKEUP_TIME);
+        }
+        /* WRITE SPI_READ_REQ */
+        spi_prepare_header(spi_tx_buf, SPI_READ_REQ, start_register, count);
+        spi_message_init(&spimsg[0]);
+        memset(&spitr, 0,  sizeof(spitr));
+        spitr.tx_buf = spi_tx_buf;
+        spitr.rx_buf = spi_rx_buf;
+        spitr.len = SPI_APP_HEADER_LEN;
+        spi_message_add_tail(&spitr, &spimsg[0]);
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg[0]);
+        if (ret_val < 0)
+        {
+            dev_err(&mxtdata->spidevice->dev, "Error writing to spi (%d)", ret_val);
+            return ret_val;
+        }
+
+        if (0 != mxt_wait_for_chg(mxtdata))
+        {
+            dev_err(&mxtdata->spidevice->dev, "Timeout on CHG");
+        }
+
+        /* READ SPI_READ_OK */
+        spi_message_init(&spimsg[1]);
+        memset(&spitr, 0,  sizeof(spitr));
+        spitr.tx_buf = spi_tx_dummy_buf;
+        spitr.rx_buf = spi_rx_buf;
+        spitr.len = SPI_APP_HEADER_LEN + count;
+        spi_message_add_tail(&spitr, &spimsg[1]);
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg[1]);
+        if (ret_val < 0)
+        {
+            dev_err(&mxtdata->spidevice->dev, "Error reading from spi (%d)", ret_val);
+            return ret_val;
+        }
+        if (SPI_READ_OK != spi_rx_buf[0])
+        {
+            dev_err(&mxtdata->spidevice->dev, "SPI_READ_OK != %.2X reading from spi", spi_rx_buf[0]);
+            return -1;
+        }
+        if (spi_tx_buf[1] != spi_rx_buf[1] || spi_tx_buf[2] != spi_rx_buf[2])
+        {
+            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), start_register);
+            return -1;
+        }
+        if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
+        {
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), count);
+            return -1;
+        }
+    }
+    while (get_header_crc(spi_rx_buf) != spi_rx_buf[SPI_APP_HEADER_LEN-1]);
+
+    memcpy(val, spi_rx_buf + SPI_APP_HEADER_LEN, count);
+    return 0;
+}
+
+static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
 {
     u16 offset = 0;
     int ret_val;
@@ -696,7 +751,7 @@ static int mxt_read_blks(struct spi_device *spidevice, u16 start, u16 count, u8 
     {
         size = min(SPI_APP_DATA_MAX_LEN, count - offset);
 
-        ret_val = __mxt_read_reg(spidevice,
+        ret_val = __mxt_read_reg(mxtdata,
                                  start + offset,
                                  size,
                                  buf + offset);
@@ -711,44 +766,80 @@ static int mxt_read_blks(struct spi_device *spidevice, u16 start, u16 count, u8 
     return 0;
 }
 
-static int __mxt_write_reg(struct spi_device *spidevice, u16 reg, u16 len, const void *val)
+static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const void *val)
 {
-    u8 *buf;
-    size_t count;
-    int ret_val, retry;
-
-    count = len + 2;
-    buf = kmalloc(count, GFP_KERNEL);
-    if (!buf)
+    u8 attempt = 0;
+    int ret_val;
+    struct spi_message  spimsg[2];
+    struct spi_transfer spitr;
+    do
     {
-        return -ENOMEM;
-    }
-
-    buf[0] = reg & 0xff;
-    buf[1] = reg >> 8;
-    memcpy(&buf[2], val, len);
-
-    for (retry = 0; retry < 2; retry++)
-    {
-        if (retry > 0)
+        attempt++;
+        if (attempt > 1)
         {
-            dev_dbg(&spidevice->dev, "%s: retry %d\n", __func__, retry);
+            if (attempt > 3)
+            {
+                dev_err(&mxtdata->spidevice->dev, "Too many Retries\n");
+                return MXT_ERROR_IO;
+            }
+            dev_warn(&mxtdata->spidevice->dev, "Retry %d after CRC fail\n", attempt-1);
             msleep(MXT_WAKEUP_TIME);
         }
-        ret_val = i2c_master_send(spidevice, buf, count);
-        if (ret_val == count)
+        /* WRITE SPI_WRITE_REQ */
+        spi_prepare_header(spi_tx_buf, SPI_WRITE_REQ, address_iter, count);
+        memcpy(spi_tx_buf + SPI_APP_HEADER_LEN, val, count);
+        spi_message_init(&spimsg[0]);
+        memset(&spitr, 0,  sizeof(spitr));
+        spitr.tx_buf = spi_tx_buf;
+        spitr.rx_buf = spi_rx_buf;
+        spitr.len = SPI_APP_HEADER_LEN + count;
+        spi_message_add_tail(&spitr, &spimsg[0]);
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg[0]);
+        if (ret_val < 0)
         {
-            ret_val = 0;
-            break;
+            dev_err(&mxtdata->spidevice->dev, "Error writing to spi (%d)", ret_val);
+            return ret_val;
         }
-        dev_err(&spidevice->dev, "%s: i2c_master_send ret_val %d\n", __func__, ret_val);
-        ret_val = ret_val < 0 ? ret_val : -EIO;
+
+        if (0 != mxt_wait_for_chg(mxtdata))
+        {
+            dev_err(&mxtdata->spidevice->dev, "Timeout on CHG");
+        }
+
+        /* READ SPI_WRITE_OK */
+        spi_message_init(&spimsg[1]);
+        memset(&spitr, 0,  sizeof(spitr));
+        spitr.tx_buf = spi_tx_dummy_buf;
+        spitr.rx_buf = spi_rx_buf;
+        spitr.len = SPI_APP_HEADER_LEN;
+        spi_message_add_tail(&spitr, &spimsg[1]);
+        ret_val = spi_sync(mxtdata->spidevice, &spimsg[1]);
+        if (ret_val < 0)
+        {
+            dev_err(&mxtdata->spidevice->dev, "Error reading from spi (%d)", ret_val);
+            return ret_val;
+        }
+        if (SPI_WRITE_OK != spi_rx_buf[0])
+        {
+            dev_err(&mxtdata->spidevice->dev, "SPI_WRITE_OK != %.2X reading from spi", spi_rx_buf[0]);
+            return -1;
+        }
+        if (spi_tx_buf[1] != spi_rx_buf[1] || spi_tx_buf[2] != spi_rx_buf[2])
+        {
+            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), address_iter);
+            return -1;
+        }
+        if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
+        {
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), count);
+            return -1;
+        }
     }
-    kfree(buf);
-    return ret_val;
+    while (get_header_crc(spi_rx_buf) != spi_rx_buf[SPI_APP_HEADER_LEN-1]);
+    return 0;
 }
 
-static int mxt_write_blks(struct spi_device *spidevice, u16 start, u16 count, u8 *buf)
+static int mxt_write_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
 {
     u16 offset = 0;
     int ret_val;
@@ -758,7 +849,7 @@ static int mxt_write_blks(struct spi_device *spidevice, u16 start, u16 count, u8
     {
         size = min(SPI_APP_DATA_MAX_LEN, count - offset);
 
-        ret_val = __mxt_write_reg(spidevice,
+        ret_val = __mxt_write_reg(mxtdata,
                                   start + offset,
                                   size,
                                   buf + offset);
@@ -792,7 +883,7 @@ static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = mxt_read_blks(mxtdata->spidevice, off, count, buf);
+        ret_val = mxt_read_blks(mxtdata, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -817,7 +908,7 @@ static ssize_t mxt_sysfs_mem_access_write(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = mxt_write_blks(mxtdata->spidevice, off, count, buf);
+        ret_val = mxt_write_blks(mxtdata, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -1419,7 +1510,7 @@ static int mxt_read_and_process_messages(struct mxt_data *mxtdata, u8 count)
     }
 
     /* Process remaining messages if necessary */
-    ret_val = mxt_read_blks(mxtdata->spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             mxtdata->t5_cfg_address,
                             mxtdata->t5_msg_size * count,
                             mxtdata->msg_buf);
@@ -1454,7 +1545,7 @@ static irqreturn_t mxt_process_messages_t44(struct mxt_data *mxtdata)
     //dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
 
     /* Read T44 and T5 together */
-    ret_val = mxt_read_blks(mxtdata->spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             mxtdata->t44_cfg_address,
                             1 + mxtdata->t5_msg_size,
                             mxtdata->msg_buf);
@@ -1628,7 +1719,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     reg = mxtdata->t6_cfg_address + cmd_offset;
 
-    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, cmd_value);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, cmd_value);
     if (ret_val)
     {
         return ret_val;
@@ -1642,7 +1733,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
     do
     {
         msleep(20);
-        ret_val = mxt_read_blks(mxtdata->spidevice, reg, 1, &command_register);
+        ret_val = mxt_read_blks(mxtdata, reg, 1, &command_register);
         if (ret_val)
         {
             return ret_val;
@@ -1757,7 +1848,6 @@ static u32 mxt_calculate_crc(u8 *base, off_t start_off, off_t end_off)
 
 static int mxt_check_retrigen(struct mxt_data *mxtdata)
 {
-    struct spi_device *spidevice = mxtdata->spidevice;
     int ret_val;
     int val;
 
@@ -1768,7 +1858,7 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
 
     if (mxtdata->t18_cfg_address)
     {
-        ret_val = mxt_read_blks(spidevice,
+        ret_val = mxt_read_blks(mxtdata,
                                 mxtdata->t18_cfg_address + MXT_T18_CFG_CTRL_OFFSET,
                                 1, &val);
         if (ret_val)
@@ -1782,7 +1872,7 @@ static int mxt_check_retrigen(struct mxt_data *mxtdata)
         }
     }
 
-    dev_warn(&spidevice->dev, "Enabling RETRIGEN workaround\n");
+    dev_warn(&mxtdata->spidevice->dev, "Enabling RETRIGEN workaround\n");
     mxtdata->use_retrigen_workaround = true;
     return 0;
 }
@@ -2067,7 +2157,7 @@ static int mxt_update_cfg(struct mxt_data *mxtdata, const struct firmware *fw)
         }
     }
 
-    ret_val = mxt_write_blks(mxtdata->spidevice, cfg.start_ofs, cfg.mem_size, cfg.mem);
+    ret_val = mxt_write_blks(mxtdata, cfg.start_ofs, cfg.mem_size, cfg.mem);
     if (ret_val)
     {
         goto release_mem;
@@ -2337,7 +2427,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     }
 
     /* Read information block, starting at address 0 */
-    ret_val = mxt_read_blks(spidevice, 0, size, mxtinfo);
+    ret_val = mxt_read_blks(mxtdata, 0, size, mxtinfo);
     if (ret_val)
     {
         kfree(mxtinfo);
@@ -2355,7 +2445,7 @@ static int mxt_read_info_block(struct mxt_data *mxtdata)
     }
 
     /* Read rest of info block */
-    ret_val = mxt_read_blks(spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             MXT_OBJECT_START,
                             size - MXT_OBJECT_START,
                             buf + MXT_OBJECT_START);
@@ -2537,7 +2627,7 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = mxt_read_blks(spidevice, object->start_address, 1, &ctrl_byte);
+    ret_val = mxt_read_blks(mxtdata, object->start_address, 1, &ctrl_byte);
     if (ret_val)
     {
         return ret_val;
@@ -2549,7 +2639,7 @@ static int mxt_input_device_set_up_active_stylus(struct mxt_data *mxtdata)
         return 0;
     }
 
-    ret_val = mxt_read_blks(spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             object->start_address + MXT_T107_CFG_STYAUX_OFFSET,
                             1, &styaux_byte);
     if (ret_val)
@@ -2600,7 +2690,7 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     }
 
     /* read touchscreen dimensions */
-    ret_val = mxt_read_blks(spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             object->start_address + MXT_T100_CFG_XRANGE_OFFSET,
                             2, range_x);
     if (ret_val)
@@ -2610,7 +2700,7 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_max_x = range_x[0] | range_x[1] << 8; // little endian 16
 
-    ret_val = mxt_read_blks(spidevice,
+    ret_val = mxt_read_blks(mxtdata,
                             object->start_address + MXT_T100_CFG_YRANGE_OFFSET,
                             2, range_y);
     if (ret_val)
@@ -2621,7 +2711,7 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
     mxtdata->t100_max_y = range_y[0] | range_y[1] << 8; // little endian 16
 
     /* read orientation config */
-    ret_val =  mxt_read_blks(spidevice,
+    ret_val =  mxt_read_blks(mxtdata,
                              object->start_address + MXT_T100_CFG_CFG1_OFFSET,
                              1, &cfg1_byte);
     if (ret_val)
@@ -2631,7 +2721,7 @@ static int mxt_read_t100_multiple_touch_cfg(struct mxt_data *mxtdata)
 
     mxtdata->t100_xy_switch = cfg1_byte & MXT_T100_CFG_CFG1_SWITCHXY_BIT;
 
-    ret_val =  mxt_read_blks(spidevice,
+    ret_val =  mxt_read_blks(mxtdata,
                              object->start_address + MXT_T100_CFG_TCHAUX_OFFSET,
                              1, &tchaux_byte);
     if (ret_val)
@@ -2878,7 +2968,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     dev_dbg(&mxtdata->spidevice->dev, "%s >\n", __func__);
 
     reg = mxtdata->t93_cfg_address + cmd_offset;
-    ret_val = mxt_read_blks(mxtdata->spidevice, reg, 1, &command_register);
+    ret_val = mxt_read_blks(mxtdata, reg, 1, &command_register);
     if (ret_val)
     {
         return ret_val;
@@ -2892,7 +2982,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     {
         command_register &= ~(MXT_T93_CTRL_ENABLE|MXT_T93_CTRL_RPTEN);
     }
-    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -2913,7 +3003,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     reg = mxtdata->t100_cfg_address + cmd_offset;
     command_register = type;
 
-    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -3056,7 +3146,7 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
         new_config = &mxtdata->t7_powercfg;
     }
 
-    ret_val = mxt_write_blks(mxtdata->spidevice,
+    ret_val = mxt_write_blks(mxtdata,
                              mxtdata->t7_cfg_address,
                              sizeof(mxtdata->t7_powercfg),
                              new_config);
@@ -3078,7 +3168,7 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
 
     for (retry = 0; retry < 2; retry++)
     {
-        ret_val = mxt_read_blks(mxtdata->spidevice,
+        ret_val = mxt_read_blks(mxtdata,
                                 mxtdata->t7_cfg_address,
                                 sizeof(mxtdata->t7_powercfg),
                                 &mxtdata->t7_powercfg);
@@ -3251,7 +3341,7 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
                     u16 size = mxt_get_obj_size(object);
                     u16 addr = object->start_address + j * size;
 
-                    ret_val = mxt_read_blks(mxtdata->spidevice, addr, size, obuf);
+                    ret_val = mxt_read_blks(mxtdata, addr, size, obuf);
                     if (ret_val)
                     {
                         goto done;
@@ -3268,25 +3358,6 @@ static ssize_t mxt_devattr_object_show(struct device *dev,
 done:
     kfree(obuf);
     return ret_val ?: count;
-}
-
-static u8 mxt_read_chg(struct mxt_data *mxtdata)
-{
-    u8 ret_val = (u8)gpio_get_value(mxtdata->mxtplatform->gpio_chg_irq);
-    return ret_val;
-}
-
-static int mxt_wait_for_chg(struct mxt_data *mxtdata)
-{
-    int timeout_counter = 2500; // 50 msec
-
-    while (0 != mxt_read_chg(mxtdata) && timeout_counter > 0)
-    {
-        timeout_counter--;
-        udelay(20);
-    }
-
-    return timeout_counter > 0 ? 0 : -1;
 }
 
 static int mxt_check_bootloader(struct mxt_data *mxtdata, unsigned int expected_next_state)
