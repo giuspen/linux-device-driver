@@ -16,9 +16,9 @@
  */
 
 // uncomment to enable the dev_dbg prints to dmesg
-#define DEBUG
+//#define DEBUG
 // uncomment to test with input forced open
-#define INPUT_DEVICE_ALWAYS_OPEN
+//#define INPUT_DEVICE_ALWAYS_OPEN
 
 #include <linux/acpi.h>
 #include <linux/dmi.h>
@@ -667,7 +667,7 @@ static int mxt_wait_for_chg(struct mxt_data *mxtdata)
     return timeout_counter > 0 ? 0 : -1;
 }
 
-static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 count, void *val)
+static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 len, u8 *val)
 {
     u8 attempt = 0;
     int ret_val;
@@ -687,7 +687,7 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 coun
             msleep(MXT_WAKEUP_TIME);
         }
         /* WRITE SPI_READ_REQ */
-        spi_prepare_header(spi_tx_buf, SPI_READ_REQ, start_register, count);
+        spi_prepare_header(spi_tx_buf, SPI_READ_REQ, start_register, len);
         spi_message_init(&spimsg[0]);
         memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_buf;
@@ -711,7 +711,7 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 coun
         memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_dummy_buf;
         spitr.rx_buf = spi_rx_buf;
-        spitr.len = SPI_APP_HEADER_LEN + count;
+        spitr.len = SPI_APP_HEADER_LEN + len;
         spi_message_add_tail(&spitr, &spimsg[1]);
         ret_val = spi_sync(mxtdata->spidevice, &spimsg[1]);
         if (ret_val < 0)
@@ -731,13 +731,13 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 coun
         }
         if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), count);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), len);
             return -1;
         }
     }
     while (get_header_crc(spi_rx_buf) != spi_rx_buf[SPI_APP_HEADER_LEN-1]);
 
-    memcpy(val, spi_rx_buf + SPI_APP_HEADER_LEN, count);
+    memcpy(val, spi_rx_buf + SPI_APP_HEADER_LEN, len);
     return 0;
 }
 
@@ -766,7 +766,7 @@ static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf
     return 0;
 }
 
-static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const void *val)
+static int __mxt_write_reg(struct mxt_data *mxtdata, u16 start_register, u16 len, const u8 *val)
 {
     u8 attempt = 0;
     int ret_val;
@@ -780,19 +780,19 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const v
             if (attempt > 3)
             {
                 dev_err(&mxtdata->spidevice->dev, "Too many Retries\n");
-                return MXT_ERROR_IO;
+                return -EIO;
             }
             dev_warn(&mxtdata->spidevice->dev, "Retry %d after CRC fail\n", attempt-1);
             msleep(MXT_WAKEUP_TIME);
         }
         /* WRITE SPI_WRITE_REQ */
-        spi_prepare_header(spi_tx_buf, SPI_WRITE_REQ, address_iter, count);
-        memcpy(spi_tx_buf + SPI_APP_HEADER_LEN, val, count);
+        spi_prepare_header(spi_tx_buf, SPI_WRITE_REQ, start_register, len);
+        memcpy(spi_tx_buf + SPI_APP_HEADER_LEN, val, len);
         spi_message_init(&spimsg[0]);
         memset(&spitr, 0,  sizeof(struct spi_transfer));
         spitr.tx_buf = spi_tx_buf;
         spitr.rx_buf = spi_rx_buf;
-        spitr.len = SPI_APP_HEADER_LEN + count;
+        spitr.len = SPI_APP_HEADER_LEN + len;
         spi_message_add_tail(&spitr, &spimsg[0]);
         ret_val = spi_sync(mxtdata->spidevice, &spimsg[0]);
         if (ret_val < 0)
@@ -826,12 +826,12 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 reg, u16 count, const v
         }
         if (spi_tx_buf[1] != spi_rx_buf[1] || spi_tx_buf[2] != spi_rx_buf[2])
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), address_iter);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), start_register);
             return -1;
         }
         if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), count);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), len);
             return -1;
         }
     }
@@ -1198,7 +1198,6 @@ static void mxt_recv_t93_touch_sequence_msg(struct mxt_data *mxtdata, u8 *msg)
     input_sync(mxtdata->inputdev);
 }
 
-#ifdef DEBUG
 static const char *get_t100_touch_type_str(u8 touch_type)
 {
     switch (touch_type)
@@ -1222,7 +1221,6 @@ static const char *get_t100_touch_type_str(u8 touch_type)
     }
     return "???";
 }
-#endif
 
 static void mxt_recv_t100_multiple_touch_msg(struct mxt_data *mxtdata, u8 *message)
 {
@@ -1742,7 +1740,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     reg = mxtdata->t6_cfg_address + cmd_offset;
 
-    ret_val = mxt_write_blks(mxtdata, reg, 1, cmd_value);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &cmd_value);
     if (ret_val)
     {
         return ret_val;
@@ -1872,7 +1870,7 @@ static u32 mxt_calculate_crc(u8 *base, off_t start_off, off_t end_off)
 static int mxt_check_retrigen(struct mxt_data *mxtdata)
 {
     int ret_val;
-    int val;
+    u8 val;
 
     if (irq_get_trigger_type(mxtdata->chg_irq) & IRQF_TRIGGER_LOW)
     {
@@ -2226,7 +2224,7 @@ static int mxt_acquire_irq(struct mxt_data *mxtdata)
                                        NULL,
                                        mxt_interrupt,
                                        IRQF_TRIGGER_FALLING | IRQF_ONESHOT | IRQF_NO_SUSPEND,
-                                       mxtdata->spidevice->name,
+                                       mxtdata->spidevice->modalias,
                                        mxtdata);
         if (ret_val)
         {
@@ -3005,7 +3003,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     {
         command_register &= ~(MXT_T93_CTRL_ENABLE|MXT_T93_CTRL_RPTEN);
     }
-    ret_val = mxt_write_blks(mxtdata, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &command_register);
 
     if (ret_val)
     {
@@ -3026,7 +3024,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     reg = mxtdata->t100_cfg_address + cmd_offset;
     command_register = type;
 
-    ret_val = mxt_write_blks(mxtdata, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata, reg, 1, &command_register);
 
     if (ret_val)
     {
@@ -3172,7 +3170,7 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
     ret_val = mxt_write_blks(mxtdata,
                              mxtdata->t7_cfg_address,
                              sizeof(mxtdata->t7_powercfg),
-                             new_config);
+                             (u8*)new_config);
     if (0 == ret_val)
     {
         dev_info(dev, "Set T7 ACTV:%d IDLE:%d\n", new_config->active, new_config->idle);
@@ -3194,7 +3192,7 @@ static int mxt_init_t7_power_cfg(struct mxt_data *mxtdata)
         ret_val = mxt_read_blks(mxtdata,
                                 mxtdata->t7_cfg_address,
                                 sizeof(mxtdata->t7_powercfg),
-                                &mxtdata->t7_powercfg);
+                                (u8*)&mxtdata->t7_powercfg);
         if (ret_val)
         {
             return ret_val;
