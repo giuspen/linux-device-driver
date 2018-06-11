@@ -817,7 +817,7 @@ static ssize_t mxt_sysfs_mem_access_write(struct file *filp,
 
     if (count > 0)
     {
-        ret_val = __mxt_write_reg(mxtdata->spidevice, off, count, buf);
+        ret_val = mxt_write_blks(mxtdata->spidevice, off, count, buf);
     }
 
     return ret_val == 0 ? count : ret_val;
@@ -1628,7 +1628,7 @@ static int mxt_send_t6_command_processor(struct mxt_data *mxtdata, u16 cmd_offse
 
     reg = mxtdata->t6_cfg_address + cmd_offset;
 
-    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, cmd_value);
+    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, cmd_value);
     if (ret_val)
     {
         return ret_val;
@@ -2892,7 +2892,7 @@ static int mxt_set_t93_touchsequence_ena_dis_cfg(struct mxt_data *mxtdata, u16 c
     {
         command_register &= ~(MXT_T93_CTRL_ENABLE|MXT_T93_CTRL_RPTEN);
     }
-    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -2913,7 +2913,7 @@ static int mxt_set_t100_multitouchscreen_cfg(struct mxt_data *mxtdata, u16 cmd_o
     reg = mxtdata->t100_cfg_address + cmd_offset;
     command_register = type;
 
-    ret_val = __mxt_write_reg(mxtdata->spidevice, reg, 1, command_register);
+    ret_val = mxt_write_blks(mxtdata->spidevice, reg, 1, command_register);
 
     if (ret_val)
     {
@@ -3056,10 +3056,10 @@ static int mxt_set_t7_power_cfg(struct mxt_data *mxtdata, u8 sleep)
         new_config = &mxtdata->t7_powercfg;
     }
 
-    ret_val = __mxt_write_reg(mxtdata->spidevice,
-                              mxtdata->t7_cfg_address,
-                              sizeof(mxtdata->t7_powercfg),
-                              new_config);
+    ret_val = mxt_write_blks(mxtdata->spidevice,
+                             mxtdata->t7_cfg_address,
+                             sizeof(mxtdata->t7_powercfg),
+                             new_config);
     if (0 == ret_val)
     {
         dev_info(dev, "Set T7 ACTV:%d IDLE:%d\n", new_config->active, new_config->idle);
