@@ -16,7 +16,7 @@
  */
 
 // uncomment to enable the dev_dbg prints to dmesg
-//#define DEBUG
+#define DEBUG
 // uncomment to test with input forced open
 //#define INPUT_DEVICE_ALWAYS_OPEN
 
@@ -724,14 +724,14 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 len,
             dev_err(&mxtdata->spidevice->dev, "SPI_READ_OK != %.2X reading from spi", spi_rx_buf[0]);
             return -1;
         }
-        if (spi_tx_buf[1] != spi_rx_buf[1] || spi_tx_buf[2] != spi_rx_buf[2])
+        if (start_register != (spi_rx_buf[1] | spi_rx_buf[2] << 8))
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), start_register);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | spi_rx_buf[2] << 8, start_register);
             return -1;
         }
-        if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
+        if (len != (spi_rx_buf[3] | spi_rx_buf[4] << 8))
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), len);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | spi_rx_buf[4] << 8, len);
             return -1;
         }
     }
@@ -744,7 +744,7 @@ static int __mxt_read_reg(struct mxt_data *mxtdata, u16 start_register, u16 len,
 static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
 {
     u16 offset = 0;
-    int ret_val;
+    int ret_val = 0;
     u16 size;
 
     while (offset < count)
@@ -757,13 +757,13 @@ static int mxt_read_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf
                                  buf + offset);
         if (ret_val)
         {
-            return ret_val;
+            break;
         }
 
         offset += size;
     }
 
-    return 0;
+    return ret_val;
 }
 
 static int __mxt_write_reg(struct mxt_data *mxtdata, u16 start_register, u16 len, const u8 *val)
@@ -824,14 +824,14 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 start_register, u16 len
             dev_err(&mxtdata->spidevice->dev, "SPI_WRITE_OK != %.2X reading from spi", spi_rx_buf[0]);
             return -1;
         }
-        if (spi_tx_buf[1] != spi_rx_buf[1] || spi_tx_buf[2] != spi_rx_buf[2])
+        if (start_register != (spi_rx_buf[1] | spi_rx_buf[2] << 8))
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | (spi_rx_buf[2] << 8), start_register);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected address %d != %d reading from spi", spi_rx_buf[1] | spi_rx_buf[2] << 8, start_register);
             return -1;
         }
-        if (spi_tx_buf[3] != spi_rx_buf[3] || spi_tx_buf[4] != spi_rx_buf[4])
+        if (len != (spi_rx_buf[3] | spi_rx_buf[4] << 8))
         {
-            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | (spi_rx_buf[4] << 8), len);
+            dev_err(&mxtdata->spidevice->dev, "Unexpected count %d != %d reading from spi", spi_rx_buf[3] | spi_rx_buf[4] << 8, len);
             return -1;
         }
     }
@@ -842,7 +842,7 @@ static int __mxt_write_reg(struct mxt_data *mxtdata, u16 start_register, u16 len
 static int mxt_write_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *buf)
 {
     u16 offset = 0;
-    int ret_val;
+    int ret_val = 0;
     u16 size;
 
     while (offset < count)
@@ -855,13 +855,13 @@ static int mxt_write_blks(struct mxt_data *mxtdata, u16 start, u16 count, u8 *bu
                                   buf + offset);
         if (ret_val)
         {
-            return ret_val;
+            break;
         }
 
         offset += size;
     }
 
-    return 0;
+    return ret_val;
 }
 
 static ssize_t mxt_sysfs_mem_access_read(struct file *filp,
@@ -1432,7 +1432,7 @@ static int mxt_proc_message(struct mxt_data *mxtdata, u8 *message)
     bool dump = mxtdata->debug_enabled;
     bool msg_discarded = false;
 
-    if (MXT_T5_REPORTID_VAL_NOMSG == report_id)
+    if (0 == report_id || MXT_T5_REPORTID_VAL_NOMSG == report_id)
     {
         return 0;
     }
@@ -3056,7 +3056,7 @@ static int mxt_initialize(struct mxt_data *mxtdata)
     while (1)
     {
         ret_val = mxt_read_info_block(mxtdata);
-        if (!ret_val)
+        if (0 == ret_val)
         {
             break;
         }
